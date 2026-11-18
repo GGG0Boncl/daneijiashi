@@ -32,6 +32,8 @@ if errorlevel 1 git config user.name "ChengLong"
 git config --get user.email >nul 2>&1
 if errorlevel 1 git config user.email "chenglong@localhost"
 git config core.quotepath false >nul 2>&1
+REM Git for Windows bundles Git Credential Manager; use it so a login window can appear.
+git config credential.helper manager >nul 2>&1
 
 git remote remove origin >nul 2>&1
 git remote add origin "%REPO%"
