@@ -1,4 +1,4 @@
-# 大内家事 · 家庭小目标与家国角色扮演
+﻿# 大内家事 · 家庭小目标与家国角色扮演
 
 给一家人用的本地小目标打卡 + 御书房角色扮演：手机 App 记录每日差事、内阁年度计划与预算、六部差事，
 家里的 Windows 电脑跑中枢做局域网同步、看板与 DeepSeek 复盘；数据只在家里，不靠第三方推送或云服务。
@@ -41,12 +41,12 @@ tools\build-apk.cmd
 ## 上传到 GitHub
 
 仓库只收源码与文档：`data/`（家人真实记录）、`node_modules/`、Android 构建产物、`dist/*.apk` 都已在
-`.gitignore` 里排除。目标仓库：<https://github.com/GGG0Boncl/danei-jiashi>。
+`.gitignore` 里排除。目标仓库：<https://github.com/GGG0Boncl/daneijiashi>。
 
 首次上传：
 
 1. 在 GitHub 新建一个**空仓库** `danei-jiashi`（不要勾 README / .gitignore / license）。
-2. 双击 `tools\push-to-github.cmd`（默认推到 `https://github.com/GGG0Boncl/danei-jiashi.git`，
+2. 双击 `tools\push-to-github.cmd`（默认推到 `https://github.com/GGG0Boncl/daneijiashi.git`，
    要换地址就把仓库地址当参数传进去）。
 3. 之后改了代码，重复第 2 步即可；脚本会 `git add`、commit、push 到 `main`。
 

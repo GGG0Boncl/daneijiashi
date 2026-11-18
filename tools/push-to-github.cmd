@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 REM One-click push of the source and docs to the user's GitHub repository.
 REM Usage: push-to-github.cmd [https://github.com/USER/REPO.git]
 REM Notes:
@@ -10,7 +10,7 @@ chcp 65001 >nul
 set "GIT_SSL_NO_VERIFY=1"
 cd /d "%~dp0.."
 
-set "DEFAULT_REPO=https://github.com/GGG0Boncl/danei-jiashi.git"
+set "DEFAULT_REPO=https://github.com/GGG0Boncl/daneijiashi.git"
 if "%~1"=="" (
   set "REPO=%DEFAULT_REPO%"
 ) else (
