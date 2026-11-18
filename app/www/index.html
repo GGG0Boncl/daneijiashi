@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#EDE4D3" />
+  <title>大内家事</title>
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+  <div id="app" hidden>
+    <header>
+      <div class="hd-top">
+        <button class="avatar" id="avatarBtn" type="button" aria-label="换头像">
+          <img id="avatarImg" alt="" hidden />
+          <span id="avatarFallback">朕</span>
+        </button>
+        <div class="who">
+          <div class="greet" id="greet">恭请圣安</div>
+          <div class="sub" id="subline"></div>
+        </div>
+        <button class="pill" id="syncPill" type="button">驿路未通</button>
+      </div>
+      <div class="daterow">
+        <span class="date" id="dateLine"></span>
+        <span class="weekday" id="weekdayLine"></span>
+        <span class="today-note" id="todayNote"></span>
+      </div>
+      <button class="usage-line" id="usageLine" type="button">中枢账房</button>
+      <input id="avatarFile" type="file" accept="image/*" hidden />
+    </header>
+
+    <main>
+      <section id="pageCourt">
+        <section class="card" id="annualCard"></section>
+        <section class="card" id="courtCard"></section>
+        <section class="card" id="courtListCard"></section>
+      </section>
+
+      <section id="pageDaily" hidden>
+        <section class="card" id="todayCard"></section>
+        <div class="hint" id="todayHint" style="padding:0 4px 8px"></div>
+        <div class="hint" id="historySummary" style="padding:0 4px 10px"></div>
+        <section class="card" id="historyCard"></section>
+        <section class="card" id="aiCard"></section>
+      </section>
+
+      <section class="card" id="settingsCard" hidden></section>
+    </main>
+
+    <div class="bottom-bar">
+      <button class="tab-btn active" id="tabCourt" type="button" data-page="court">🏯 朝廷</button>
+      <button class="tab-btn" id="tabDaily" type="button" data-page="daily">📜 起居</button>
+      <button class="btn ghost settings-btn" id="openSettings" type="button">朕的私事</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

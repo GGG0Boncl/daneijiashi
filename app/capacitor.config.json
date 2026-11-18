@@ -1,0 +1,11 @@
+﻿{
+  "appId": "com.family.checkin",
+  "appName": "大内家事",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

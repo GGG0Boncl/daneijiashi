@@ -1,0 +1,30 @@
+# 依赖与构建产物（按需 npm install / npx cap sync / gradlew 生成）
+node_modules/
+app/node_modules/
+app/android/.gradle/
+app/android/build/
+app/android/app/build/
+app/android/capacitor-cordova-android-plugins/
+app/android/app/src/main/assets/public/
+app/android/app/src/main/assets/capacitor.config.json
+app/android/app/src/main/assets/capacitor.plugins.json
+app/android/local.properties
+*.log
+*.tmp
+
+# 家里的真实数据，绝不入库
+data/
+test-data/
+
+# 安装包与打包缓存（要发 APK 请走 Release 或私发）
+dist/*.apk
+dist/*.aab
+*.keystore
+*.jks
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
