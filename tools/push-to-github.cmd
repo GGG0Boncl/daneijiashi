@@ -54,9 +54,9 @@ git push -u origin main
 if errorlevel 1 (
   echo.
   echo Push failed. Check:
-  echo   1) the empty GitHub repository exists and the URL is correct;
-  echo   2) you are signed in to GitHub on this computer;
-  echo   3) if password auth is rejected, use a Personal Access Token as the password.
+  echo   - the empty GitHub repository exists and the URL is correct;
+  echo   - you are signed in to GitHub on this computer;
+  echo   - if password auth is rejected, use a Personal Access Token as the password.
   exit /b 1
 )
 echo.
