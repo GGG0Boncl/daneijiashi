@@ -123,6 +123,7 @@ node test\dispatch.test.mjs           REM 司礼监传旨：三类事 + 到点�
 
 - 提醒全部走 `@capacitor/local-notifications`（Android AlarmManager），**不要求 WebView 常驻后台**；
   App 打开 / 数据变化 / 回到前台时，`applyPlan()` 把未来提醒重新排给系统，系统到点自己弹。
+  07:30 会预排未来 30 天（当天已过点或已设目标则跳过），因此只要一个月内打开过一次 App，早间提醒就不会断。
 - App 侧顺序：`ensureChannel()`（`checkin` + `court`）→ `ensurePermission()` → `applyPlan(records, now, courtState)`。
 - 「朕的私事 → 提醒」的**通知自检**会显示：通知权限、精确闹钟、渠道、待发条数、下一条时刻；
   另有三颗按钮：`准点闹钟设置`（`changeExactNotificationSetting`）、`补排提醒`（重新 `applyPlan`）、`发测试通知`（3 秒后）。

@@ -102,20 +102,20 @@ test('统计与文案', () => {
   assert.equal(dayLabel(allDone), '已办 67% · 办了 2/3 桩');
 });
 
-test('07:30 提醒：没提交才排，已过点不排，未来 6 天都排', () => {
+test('07:30 提醒：没提交才排，已过点不排，未来 30 天都排', () => {
   const early = planReminders([], at('2026-11-18T06:00:00+08:00'));
   const sevenThirty = early.filter((p) => p.kind === '0730');
-  assert.equal(sevenThirty.length, 7);
+  assert.equal(sevenThirty.length, 30);
   assert.equal(sevenThirty[0].at, '2026-11-18T07:30:00+08:00');
-  assert.equal(sevenThirty.at(-1).at, '2026-11-24T07:30:00+08:00');
+  assert.equal(sevenThirty.at(-1).at, '2026-12-17T07:30:00+08:00');
 
   const late = planReminders([], at('2026-11-18T08:00:00+08:00'));
   const sevenLate = late.filter((p) => p.kind === '0730');
-  assert.equal(sevenLate.length, 6);
+  assert.equal(sevenLate.length, 29);
   assert.equal(sevenLate[0].at, '2026-11-19T07:30:00+08:00');
 
   const submitted = planReminders([withGoals(['背单词'])], at('2026-11-18T06:00:00+08:00'));
-  assert.equal(submitted.filter((p) => p.kind === '0730').length, 6);
+  assert.equal(submitted.filter((p) => p.kind === '0730').length, 29);
   assert.ok(!submitted.some((p) => p.at === '2026-11-18T07:30:00+08:00'));
 });
 

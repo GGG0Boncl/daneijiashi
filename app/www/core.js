@@ -195,7 +195,7 @@ export function planReminders(records, now = new Date(), courtState = null) {
   const pending = goals.filter((g) => g.status === 'pending');
   const plan = [];
 
-  for (let d = 0; d < 7; d += 1) {
+  for (let d = 0; d < 30; d += 1) {
     const dateStr = addDays(today, d);
     if (d === 0) {
       if (minutes >= 7 * 60 + 30) continue; // 今天 07:30 已过
