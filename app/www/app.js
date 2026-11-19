@@ -436,7 +436,7 @@ function renderToday() {
 
   const list = goals.length
     ? goals.map(goalRow).join('')
-    : `<div class="empty"><span class="cat">🐱</span>${all.length ? '今日差事俱已办成' : '今日尚无差事，去司礼监传旨'}</div>`;
+    : `<div class="empty"><span class="cat">🐱</span>${all.length ? '今日差事俱已办成' : '今日尚无差事，由司礼监传旨生成'}</div>`;
 
   const pct = all.length ? Math.round(all.reduce((a, g) => a + (Number(g.progress) || (g.status === 'done' ? 100 : 0)), 0) / all.length) : 0;
 
@@ -448,9 +448,7 @@ function renderToday() {
       ${showAll && all.length ? '<button class="mini-btn" data-showall="today">只看未了</button>' : ''}
     </div>
     ${list}
-    <div class="btnrow" style="margin-top:10px">
-      <button type="button" class="btn ghost block" data-open-dispatch>🖋️ 让司礼监拟今日差事</button>
-    </div>
+    <div class="ai-note">今日差事也由司礼监传旨生成；在朝廷页「司礼监 · 传旨」里说一声即可。</div>
   `;
 
   const hint = [];
@@ -614,30 +612,58 @@ async function syncCourtNow({ quiet = true } = {}) {
   if (!state.hub.url || !state.identity || state.court.syncing) return;
   state.court.syncing = true;
   try {
-    const res = await pushCourtState({
+    const me = state.identity.memberId;
+    const wantedRole = state.court.roles?.[me];
+    let res = await pushCourtState({
       url: state.hub.url,
       token: state.hub.token,
-      memberId: state.identity.memberId,
+      memberId: me,
       state: state.court.state,
     });
     if (!res?.state) return;
+
+    // 中枢不认本机的身份（常见：身份只在本机设过）→ 把本机身份推给中枢再传一次
+    let rejectedTasks = res.rejected?.tasks === true;
+    if (rejectedTasks && (wantedRole === 'emperor' || wantedRole === 'empress')) {
+      try {
+        await setCourtRole({ url: state.hub.url, token: state.hub.token, memberId: me, role: wantedRole });
+        const retry = await pushCourtState({
+          url: state.hub.url,
+          token: state.hub.token,
+          memberId: me,
+          state: state.court.state,
+        });
+        if (retry?.state) {
+          res = retry;
+          rejectedTasks = retry.rejected?.tasks === true;
+        }
+      } catch {
+        /* 推不上去就保持本机 */
+      }
+    }
+
     const merged = court.mergeCourtState(state.court.state, res.state);
     if (res.rejected?.annual) merged.annual = res.state.annual;
-    if (res.rejected?.tasks) merged.tasks = res.state.tasks;
+    // 六部差事被中枢拒绝时，保留本机这份（别让刚传的旨凭空消失）
     state.court.state = merged;
     await store.setMeta('courtState', merged);
-    if (res.role && state.court.roles?.[state.identity.memberId] !== res.role) {
-      state.court.roles = { ...state.court.roles, [state.identity.memberId]: res.role };
+    if (res.role && state.court.roles?.[me] !== res.role) {
+      state.court.roles = { ...state.court.roles, [me]: res.role };
       await store.setMeta('courtRoles', state.court.roles);
     }
     refreshRole();
     renderAnnual();
+    renderDispatchCard();
     renderCourt();
     state.dirty = 0;
     renderSyncPill();
     if (!quiet) toast('六部台账已与中枢对账', 2200);
     if (res.rejected?.annual) toast('内阁大事只能由陛下与皇后定夺，本机改动已退回', 4200);
     if (res.rejected?.annualIds?.length) toast('有一桩内阁大事今年调整次数已满，措辞未准', 4200);
+    if (rejectedTasks && !state.court.roleWarned) {
+      state.court.roleWarned = true;
+      toast('中枢没认六部差事：到「朕的私事」把身份设为陛下 / 皇后，再点驿牌传书', 5200);
+    }
   } catch {
     /* 驿路未通：记在本机，回头再传 */
   } finally {
@@ -702,10 +728,10 @@ function renderAnnual() {
     ${!items.length && all.length ? '<div class="ai-note">内阁大事俱已办成，可「查看全部」翻旧账。</div>' : ''}
     ${!all.length
       ? (canEdit
-        ? `<button type="button" class="annual-empty-btn" data-open-dispatch><span class="cat">🏯</span><b>内阁还无一桩大事</b><span>去司礼监传旨：定下今年的计划与预算</span></button>`
+        ? '<div class="annual-empty-note"><span class="cat">🏯</span><b>内阁还无一桩大事</b><span>到司礼监传旨，定下今年的计划与预算</span></div>'
         : '<div class="empty">内阁还无一桩大事，由陛下与皇后定夺。</div>')
       : ''}
-    ${canEdit && all.length ? '<button type="button" class="btn ghost block annual-add" data-open-dispatch>🖋️ 再让司礼监传一道旨</button>' : ''}
+    ${canEdit && all.length ? '<div class="ai-note">要添新事、改预算，都去司礼监传旨。</div>' : ''}
     ${!canEdit && all.length ? '<div class="ai-note">（内阁大事由陛下与皇后定夺）</div>' : ''}
   `;
 }
@@ -942,7 +968,13 @@ function deptList() {
     : state.court.depts?.length
       ? state.court.depts
       : DEFAULT_DEPTS;
-  return src.map((d) => ({ ...d, dutyText: dutyOf(d) }));
+  return src.map((d) => ({
+    ...d,
+    dutyText: dutyOf(d),
+    briefText: String(d.brief ?? '').trim()
+      || DEFAULT_DEPTS.find((x) => x.id === d.id)?.brief
+      || dutyOf(d),
+  }));
 }
 
 function latestDeptMemorial(deptId) {
@@ -1003,15 +1035,29 @@ function deptRow(d) {
     const sum = court.summarizeLedgerLocal(state.court.state, { days: 30 });
     if (sum.count) summary = `近卅日 ${sum.count} 笔 · 合计 ¥${sum.total}`;
   } else if (latest) summary = `近奏《${latest.title}》`;
-  return `<button type="button" class="dept-row" data-dept="${esc(d.id)}">
+  return `<button type="button" class="dept-row${state.ui.flashDepts?.includes(d.id) ? ' flash' : ''}" data-dept="${esc(d.id)}">
     <span class="dept-ico">${d.icon ?? ''}</span>
     <span class="dept-info">
       <span class="dept-name">${esc(d.name)}<em>${esc(d.office ?? '')}</em></span>
       ${summary ? `<span class="dept-sum">${esc(summary)}</span>` : ''}
-      <span class="dept-duty">${esc(d.dutyText)}</span>
+      <span class="dept-brief">${esc(d.briefText)}</span>
     </span>
     <span class="dept-side">${st.total ? `${st.avg}%` : '›'}</span>
   </button>`;
+}
+
+function renderDispatchCard() {
+  const el = $('#dispatchCard');
+  if (!el) return;
+  const canEdit = canRule();
+  el.innerHTML = `
+    <div class="ai-head">
+      <span>🖋️ 司礼监 · 传旨</span>
+      <span class="ai-tag ${canEdit ? 'on' : ''}">${esc(state.court.roleLabel)}可传旨</span>
+    </div>
+    <div class="ai-note">管传旨分派：把话原样说来，司礼监拆成内阁大事（带预算）、今日差事与六部差事；拟好先给你过目，点头才下旨。</div>
+    <button type="button" class="btn block dispatch-open-btn" data-open-dispatch ${canEdit ? '' : 'disabled'}>拟旨分发</button>
+  `;
 }
 
 function renderCourt() {
@@ -1030,11 +1076,6 @@ function renderCourt() {
     <div class="ai-note">六部各管一摊，点进去可下旨、记进度、催上奏。${
       hubOk ? '' : '驿路未通，差事与账先记本机，连上中枢自会传。'
     }</div>
-    <div class="dispatch-cta">
-      <div class="dispatch-head"><span>🖋️ 司礼监 · 传旨处</span><span class="ai-tag ${canEdit ? 'on' : ''}">一句话分派六部</span></div>
-      <div class="ai-note">把话原样说来，司礼监拆成内阁大事（带预算）、今日差事与六部差事，拟好先给你过目。比如「今年攒两万去海边旅游；今天背三十个单词；周六去公园玩，谁去谁留定一下」。</div>
-      <button type="button" class="btn block" data-open-dispatch ${canEdit ? '' : 'disabled'}>拟旨分发</button>
-    </div>
     <div class="dept-list">${depts.map(deptRow).join('')}</div>
     <div class="btnrow" style="margin-top:10px">
       <button type="button" class="btn" id="courtMeeting" ${hubOk ? '' : 'disabled'}>召集六部朝会</button>
@@ -1100,12 +1141,12 @@ async function openDeptSheet(deptId) {
 
   openSheet(`
     <h3>${dept.icon ?? ''} ${esc(dept.name)} · ${esc(dept.office ?? '')}</h3>
-    <p class="s">本职：${esc(dept.dutyText)}</p>
+    <p class="s">职责：${esc(dept.briefText)}</p>
     <div class="dept-tasks">${rows}</div>
     ${deptId === 'hubu' ? ledgerSectionHtml() : ''}
     ${canEdit ? `
       <div class="addbar" style="margin-top:12px">
-        <input id="deptTaskInput" type="text" maxlength="80" placeholder="给${esc(dept.name)}下旨，譬如「${esc(dept.example || dept.dutyText)}」" enterkeyhint="done">
+        <input id="deptTaskInput" type="text" maxlength="80" placeholder="给${esc(dept.name)}下旨…" enterkeyhint="done">
         <button class="btn" id="deptTaskAdd" data-dept="${deptId}">下旨</button>
       </div>` : '<div class="ai-note">下旨的事由陛下与皇后定夺；家人可以先看着。</div>'}
     <div class="sheet-actions">
@@ -1189,7 +1230,10 @@ async function runDispatch(root) {
       warning = res.warning ?? null;
       if (res.quota) applyQuota(res.quota, res.cached ? '旧旨（未耗分文）' : '司礼监拟旨完毕');
     } catch (err) {
-      warning = `中枢没搭上话（${String(err?.message ?? err).slice(0, 50)}），先按老规矩拆`;
+      const msg = String(err?.message ?? err);
+      warning = /陛下|皇后|403/.test(msg)
+        ? '中枢没认你的身份（传旨要陛下或皇后）：先到「朕的私事」把身份传上去；眼下这份只记在本机'
+        : `中枢没搭上话（${msg.slice(0, 50)}），先按老规矩拆`;
     }
   } else {
     warning = '驿路未通，司礼监按老规矩拆（不花分文）';
@@ -1303,8 +1347,20 @@ async function confirmDispatch(root, items) {
     const parts = [];
     if (annual.length) parts.push(`内阁 ${annual.length} 桩`);
     if (goals.length) parts.push(`今日差事 ${goals.length} 件`);
-    if (tasks.length) parts.push(`六部 ${tasks.length} 道`);
-    toast(`已下旨：${parts.join('、')}`, 3800);
+    if (tasks.length) {
+      const names = [...new Set(tasks.map((t) => DEPT_NAMES[t.dept] ?? t.dept))].join('、');
+      parts.push(`六部 ${tasks.length} 道（${names}）`);
+    }
+    // 让刚接到旨的部在御书房里闪一下，主上能看见落到哪儿了
+    if (tasks.length && state.page === 'court') {
+      state.ui.flashDepts = tasks.map((t) => t.dept);
+      renderCourt();
+      setTimeout(() => {
+        state.ui.flashDepts = [];
+        renderCourt();
+      }, 1800);
+    }
+    toast(`已下旨：${parts.join('、')}`, 4200);
   } catch (err) {
     toast(`下旨不成：${String(err?.message ?? err)}`, 4200);
   }
@@ -1581,6 +1637,7 @@ function render() {
   renderSyncPill();
   renderToday();
   renderAnnual();
+  renderDispatchCard();
   renderCourt();
   renderUsageLine();
   renderHistory();
@@ -1722,6 +1779,8 @@ function bindEvents() {
     if (pageBtn) {
       state.page = pageBtn.dataset.page === 'daily' ? 'daily' : 'court';
       renderPages();
+      const main = document.querySelector('main');
+      if (main) main.scrollTop = 0;
       return;
     }
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 端到端同步测试：真起一个中枢进程，用 App 自己的 sync.js 跟它打交道。
  * （不依赖手机：这正是"两层规则必须一致"的地方）
  */
@@ -18,6 +18,8 @@ const HUB = path.join(ROOT, 'hub', 'hub.mjs');
 const PORT = 8791;
 const UDP_PORT = 8792;
 const BASE = `http://127.0.0.1:${PORT}`;
+// 成员详情与看板都按"今天"取数，写死日期一过零点就会红
+const TODAY = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -37,7 +39,7 @@ async function waitForHub(tries = 40) {
 const rec = (over = {}) => ({
   memberId: '妈妈',
   memberName: '妈妈',
-  date: '2026-11-18',
+  date: TODAY,
   version: 1,
   submittedAt: '2026-11-18T07:30:00+08:00',
   updatedAt: '2026-11-18T07:30:00+08:00',
@@ -97,7 +99,7 @@ test('App ↔ 中枢 端到端同步', async (t) => {
     });
     assert.equal(firstSync.written, 1);
     assert.equal(firstSync.records.length, 1);
-    const file = path.join(dataDir, 'records', '妈妈', '2026-11-18.json');
+    const file = path.join(dataDir, 'records', '妈妈', `${TODAY}.json`);
     assert.ok(fs.existsSync(file), '中枢应该把记录写成 checkin.mjs 能读的 JSON');
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(onDisk.memberId, '妈妈');
@@ -152,7 +154,7 @@ test('App ↔ 中枢 端到端同步', async (t) => {
   });
 
   await t.test('中枢概览接口', async () => {
-    const res = await fetch(`${BASE}/api/summary?date=2026-11-18`);
+    const res = await fetch(`${BASE}/api/summary?date=${TODAY}`);
     const body = await res.json();
     assert.equal(res.status, 200);
     assert.equal(body.members.length, 1);
@@ -198,7 +200,7 @@ test('App ↔ 中枢 端到端同步', async (t) => {
     const res2 = await syncWithHub({ url: BASE, memberId: '妈妈', memberName: '妈妈', deviceId: 'dev-a', records: [rec()] });
     assert.ok(res2.pruned >= 1, `应该清掉至少 1 个超期文件，实际 ${res2.pruned}`);
     assert.ok(!fs.existsSync(oldFile), '超期文件应该被删除');
-    assert.ok(fs.existsSync(path.join(dataDir, 'records', '妈妈', '2026-11-18.json')), '保留期内的记录必须还在');
+    assert.ok(fs.existsSync(path.join(dataDir, 'records', '妈妈', `${TODAY}.json`)), '保留期内的记录必须还在');
   });
 
   /* --------- CORS：手机 App 从 https://localhost 跨源访问中枢，少了这个就 "Failed to fetch" --------- */
@@ -286,7 +288,7 @@ test('App ↔ 中枢 端到端同步', async (t) => {
       records: [rec({ memberId: id, memberName: id, deviceId: 'dev-egg' })],
     });
     assert.equal(res.written, 1, 'emoji 成员的记录应该写进去');
-    assert.ok(fs.existsSync(path.join(dataDir, 'records', id, '2026-11-18.json')), '目录名就是「瑞瑞🥚」');
+    assert.ok(fs.existsSync(path.join(dataDir, 'records', id, `${TODAY}.json`)), '目录名就是「瑞瑞🥚」');
     const st = await (await fetch(`${BASE}/api/status`)).json();
     assert.ok(st.members.some((m) => m.memberId === id), '看板要能看到这位成员');
     assert.ok(st.devices.some((d) => d.memberId === id), '设备登记也不能漏');
@@ -358,7 +360,7 @@ test('AI 复盘缓存 + 成员详情接口', async (t) => {
   const baseRec = {
     memberId: '妈妈',
     memberName: '妈妈',
-    date: '2026-11-18',
+    date: TODAY,
     version: 1,
     submittedAt: '2026-11-18T07:30:00+08:00',
     updatedAt: '2026-11-18T21:00:00+08:00',
@@ -442,6 +444,7 @@ test('AI 复盘缓存 + 成员详情接口', async (t) => {
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type') ?? '', /text\/plain/);
     const text = await res.text();
-    assert.equal(text.trim(), '2026年11月18日：背单词；跑步。');
+    const [y, mo, d] = TODAY.split('-').map(Number);
+    assert.equal(text.trim(), `${y}年${mo}月${d}日：背单词；跑步。`);
   });
 });

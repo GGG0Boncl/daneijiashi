@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * 家庭打卡中枢（Windows 侧）
  *
@@ -999,7 +999,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/court/config') {
       json(res, 200, {
         ok: true,
-        depts: COURT_DEPTS.map((d) => ({ id: d.id, name: d.name, office: d.office, icon: d.icon, duty: d.duty, example: d.example ?? '', focusHint: d.focusHint })),
+        depts: COURT_DEPTS.map((d) => ({ id: d.id, name: d.name, office: d.office, icon: d.icon, brief: d.brief ?? '', duty: d.duty, focusHint: d.focusHint })),
         roles: readRoles(DATA_DIR),
         roleLabels: COURT_ROLE_LABEL,
         roleOptions: COURT_ROLES,

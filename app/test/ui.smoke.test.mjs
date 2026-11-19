@@ -73,15 +73,17 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     assert.ok($('#syncPill'), '顶上驿牌仍在');
   });
 
-  await t.test('朝廷页：内阁最上，其次御书房与奏疏；奏疏不单开一页', () => {
-    for (const id of ['annualCard', 'courtCard', 'courtListCard']) {
+  await t.test('朝廷页：内阁 → 司礼监 → 御书房 → 奏疏', () => {
+    for (const id of ['annualCard', 'dispatchCard', 'courtCard', 'courtListCard']) {
       assert.ok($(`#${id}`), `朝廷页缺 ${id}`);
       assert.ok($(`#pageCourt #${id}`), `${id} 应在朝廷页`);
     }
     const cards = [...document.querySelectorAll('#pageCourt > section')].map((x) => x.id);
-    assert.deepEqual(cards.slice(0, 3), ['annualCard', 'courtCard', 'courtListCard']);
+    assert.deepEqual(cards.slice(0, 4), ['annualCard', 'dispatchCard', 'courtCard', 'courtListCard']);
     assert.equal($('#ledgerCard'), null, '账房不再单独占卡');
     assert.match($('#annualCard').textContent, /内阁/);
+    assert.match($('#dispatchCard').textContent, /司礼监 · 传旨/);
+    assert.ok($('#dispatchCard [data-open-dispatch]'), '传旨入口只在司礼监');
   });
 
   await t.test('起居页：今日差事 / 行事历 / 钦天监，切页能来回', async () => {
@@ -107,7 +109,8 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     assert.match(last.textContent, /朕的私事/);
     assert.equal($('#newGoal'), null, '今日差事改为司礼监传旨生成');
     assert.equal($('#addBtn'), null);
-    assert.ok($('#todayCard [data-open-dispatch]'), '起居页要有传旨入口');
+    assert.equal($('#todayCard [data-open-dispatch]'), null, '起居页不再单设传旨入口');
+    assert.match($('#todayCard').textContent, /由司礼监传旨生成/);
   });
 
   await t.test('离线也照记：先把自己认作帝后（写在本机）', async () => {
@@ -122,13 +125,14 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     await flush(40);
   });
 
-  await t.test('内阁空着：没有「添一桩」，只指路去司礼监传旨', () => {
+  await t.test('内阁空着：没有添事按钮，只提示到司礼监传旨', () => {
     const text = $('#annualCard').textContent;
     assert.match(text, /内阁还无一桩大事/);
-    assert.match(text, /去司礼监传旨/);
+    assert.match(text, /到司礼监传旨/);
     assert.equal($('#annualAddOpen'), null, '内阁不该自己添事');
     assert.equal($('#annualText'), null);
-    assert.ok($('#annualCard [data-open-dispatch]'));
+    assert.equal($('#annualCard [data-open-dispatch]'), null, '内阁不再单设传旨入口');
+    assert.equal($('#courtCard [data-open-dispatch]'), null, '御书房里不再放传旨入口');
   });
 
   await t.test('司礼监传旨：一次拆出内阁大事（带预算）与六部差事', async () => {
@@ -149,9 +153,9 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
   });
 
   await t.test('今日差事也由司礼监传旨生成（两件）', async () => {
-    document.querySelector('#tabDaily').click();
+    document.querySelector('#tabCourt').click();
     await flush(40);
-    document.querySelector('#todayCard [data-open-dispatch]').click();
+    document.querySelector('#dispatchCard [data-open-dispatch]').click();
     await flush(70);
     $('#dispatchText').value = '今天背三十个单词、跑步半小时';
     $('#dispatchGo').click();
@@ -161,6 +165,8 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     $('#dispatchConfirm').click();
     await flush(260);
     assert.equal($('#sheetMask'), null);
+    document.querySelector('#tabDaily').click();
+    await flush(40);
     assert.equal(document.querySelectorAll('.goal').length, 2);
     assert.match($('#todayCard').textContent, /背三十个单词/);
     assert.match($('#todayCard').textContent, /跑步半小时/);
@@ -229,28 +235,29 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     assert.equal(document.querySelector('#annualCard .pct-dot').textContent.trim(), '40%', '改措辞不动进度');
   });
 
-  await t.test('御书房：六部各一行，司礼监单独做传旨处', () => {
+  await t.test('御书房：六部各一行，各一句职能；司礼监在隔壁卡片', () => {
     const rows = [...document.querySelectorAll('.dept-row')];
     assert.equal(rows.length, 6, '六部各占一行');
     for (const d of ['吏部', '户部', '礼部', '兵部', '刑部', '工部']) {
       assert.ok($('#courtCard').textContent.includes(d), `缺 ${d}`);
     }
     assert.ok(document.querySelector('.dept-row[data-dept="silijian"]') === null, '司礼监不该混在六部里');
-    assert.match($('#courtCard').textContent, /司礼监 · 传旨处/);
-    assert.match($('#courtCard').textContent, /统计全员每日目标/);
-    assert.match($('#courtCard').textContent, /盘点家里近一个月花销/);
-    assert.match($('#courtCard').textContent, /水电燃气等安全巡检/);
+    assert.equal($('#courtCard [data-open-dispatch]'), null, '传旨入口不在御书房里');
+    assert.match($('#courtCard').textContent, /管考成与分工/);
+    assert.match($('#courtCard').textContent, /管钱粮账目/);
+    assert.match($('#courtCard').textContent, /管出行安全/);
+    assert.ok(!$('#courtCard').textContent.includes('湿地公园'), '御书房不再摆下旨举例');
+    // 传旨落下来的差事要能在部里看到统计
+    assert.match(document.querySelector('.dept-row[data-dept="libu2"] .dept-sum').textContent, /差事 1 道/);
+    assert.match(document.querySelector('.dept-row[data-dept="libu"] .dept-sum').textContent, /差事 1 道/);
   });
 
-  await t.test('各部下旨的举例按本部职能各不相同', async () => {
+  await t.test('各部下旨不再带举例，只留一句职责', async () => {
     document.querySelector('.dept-row[data-dept="bingbu"]').click();
     await flush(70);
-    assert.match($('#deptTaskInput').placeholder, /湿地公园/);
-    $('#deptClose').click();
-    await flush(40);
-    document.querySelector('.dept-row[data-dept="libu2"]').click();
-    await flush(70);
-    assert.match($('#deptTaskInput').placeholder, /生日饭/);
+    assert.match($('#deptTaskInput').placeholder, /给兵部下旨/);
+    assert.ok(!$('#deptTaskInput').placeholder.includes('湿地公园'), '举例已删');
+    assert.match($('#sheetMask').textContent, /职责：管出行安全/);
     $('#deptClose').click();
     await flush(40);
   });
@@ -258,7 +265,7 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
   await t.test('户部：下旨、记多笔账，账房就收在这一片里', async () => {
     document.querySelector('.dept-row[data-dept="hubu"]').click();
     await flush(70);
-    assert.match($('#sheetMask').textContent, /本职：盘点家里近一个月花销/);
+    assert.match($('#sheetMask').textContent, /职责：管钱粮账目/);
     assert.ok($('#courtLedger'), '户部里有记账入口');
     $('#deptTaskInput').value = '把本月账目理清';
     $('#deptTaskAdd').click();

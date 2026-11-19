@@ -34,6 +34,7 @@
     <main>
       <section id="pageCourt">
         <section class="card" id="annualCard"></section>
+        <section class="card" id="dispatchCard"></section>
         <section class="card" id="courtCard"></section>
         <section class="card" id="courtListCard"></section>
       </section>
@@ -50,9 +51,11 @@
     </main>
 
     <div class="bottom-bar">
-      <button class="tab-btn active" id="tabCourt" type="button" data-page="court">🏯 朝廷</button>
-      <button class="tab-btn" id="tabDaily" type="button" data-page="daily">📜 起居</button>
-      <button class="btn ghost settings-btn" id="openSettings" type="button">朕的私事</button>
+      <div class="tab-group">
+        <button class="tab-btn active" id="tabCourt" type="button" data-page="court"><span class="tab-ico">🏯</span><span>朝廷</span></button>
+        <button class="tab-btn" id="tabDaily" type="button" data-page="daily"><span class="tab-ico">📜</span><span>起居</span></button>
+      </div>
+      <button class="settings-btn" id="openSettings" type="button" aria-label="朕的私事"><span class="tab-ico">🐱</span><span>朕的私事</span></button>
     </div>
   </div>
 

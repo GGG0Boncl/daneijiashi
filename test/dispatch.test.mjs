@@ -108,15 +108,17 @@ test('模型吐出的 JSON 要过筛：三类都收、只收六部、去重、�
   assert.equal(clipTask('  a   b  '), 'a b');
 });
 
-test('每部下旨的举例各不相同，App 离线也用得上', async () => {
+test('每部只留一句简短职责，App 离线也用得上', async () => {
   const depts = await import(pathToFileURL(path.join(ROOT, 'app', 'www', 'depts.js')).href);
   const six = depts.COURT_DEPTS.filter((d) => d.id !== 'silijian');
   assert.equal(six.length, 6);
-  const examples = six.map((d) => d.example);
-  assert.ok(examples.every((e) => e && e.length > 3), '六部都要有下旨的例子');
-  assert.equal(new Set(examples).size, 6, '例子不能六部共用一句');
-  assert.match(six.find((d) => d.id === 'hubu').example, /账|花/);
-  assert.match(six.find((d) => d.id === 'bingbu').example, /公园|路线|接送/);
+  const briefs = six.map((d) => d.brief);
+  assert.ok(briefs.every((b) => b && b.length >= 3 && b.length <= 8), '每部一句短职责（3~8 字）');
+  assert.equal(new Set(briefs).size, 6, '职责不能六部共用一句');
+  assert.match(six.find((d) => d.id === 'hubu').brief, /钱粮|账/);
+  assert.match(six.find((d) => d.id === 'bingbu').brief, /出行|安全/);
+  // 举例已经撤掉，别再回到 UI
+  assert.equal(six.find((d) => d.id === 'hubu').example, undefined);
 });
 
 test('App 副本与共享规则一致（改了一边别忘了另一边）', () => {

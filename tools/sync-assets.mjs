@@ -39,8 +39,8 @@ const depts = COURT_DEPTS.map((d) => ({
   name: d.name,
   office: d.office,
   icon: d.icon,
+  brief: d.brief ?? '',
   duty: d.duty,
-  example: d.example ?? d.focusHint ?? '',
   focusHint: d.focusHint,
 }));
 const deptsFile = path.join(ROOT, 'app', 'www', 'depts.js');

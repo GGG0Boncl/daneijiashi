@@ -22,11 +22,13 @@ const PORT = 8798;
 const UDP_PORT = 8799;
 const BASE = `http://127.0.0.1:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 看板按"今天"取成员目标，测试数据必须落在今天（否则一过零点就红）
+const TODAY = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 
 const rec = (over = {}) => ({
   memberId: '妈妈',
   memberName: '妈妈',
-  date: '2026-11-18',
+  date: TODAY,
   version: 1,
   submittedAt: '2026-11-18T07:30:00+08:00',
   updatedAt: '2026-11-18T21:00:00+08:00',

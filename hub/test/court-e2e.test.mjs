@@ -86,8 +86,8 @@ test('家是小国：中枢接口全链路（假模型）', async (t) => {
     assert.equal(r.body.depts.length, 7);
     assert.ok(r.body.depts.some((d) => d.id === 'libu' && d.name === '吏部'));
     assert.ok(r.body.depts.every((d) => Array.isArray(d.duty) && d.duty[0]));
-    assert.ok(r.body.depts.every((d) => d.example && d.example.length > 3), '每部都要有下旨例子');
-    assert.notEqual(r.body.depts.find((d) => d.id === 'hubu').example, r.body.depts.find((d) => d.id === 'bingbu').example);
+    assert.ok(r.body.depts.every((d) => d.brief && d.brief.length >= 3 && d.brief.length <= 8), '每部一句短职责');
+    assert.equal(r.body.depts.find((d) => d.id === 'gongbu').example, undefined, '下旨举例已撤掉');
     assert.match(r.body.disclaimer, /平等/);
     assert.match(r.body.disclaimer, /皇后/);
   });
