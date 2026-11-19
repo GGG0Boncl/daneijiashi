@@ -10,7 +10,8 @@
 | 局域网中枢 | `hub/hub.mjs` | Windows（双击 `tools\start-hub.cmd`） |
 | 手机 App | `app/`（Capacitor 套壳） | Android |
 
-三边共用一套记录结构：`memberId / date / version / goals[{id,text,status,checkedAt,note,createdAt,updatedAt,deleted}]`。
+三边共用一套记录结构：`memberId / date / version / goals[{id,text,status,checkedAt,due,note,createdAt,updatedAt,deleted}]`。
+`due` 是可选的北京时间到点时刻（`YYYY-MM-DDTHH:mm+08:00`），用于本地闹钟；六部差事同样带 `due`。
 合并规则只有一份：`hub/merge.mjs`，用 `node tools/sync-assets.mjs` 复制成 `app/www/merge.js`（**别直接改 www 里那份**）。
 
 App 现在叫「大内家事」，分两页：**朝廷**（内阁 / 御书房 / 奏疏）与**起居**（今日差事 / 行事历 / 钦天监推演），
@@ -34,9 +35,10 @@ family-checkin/
       index.html app.css
       app.js                 界面逻辑
       core.js                纯逻辑（状态机 / 提醒排期 / 日历 / 保留期）
+      lunar.js               农历 / 中国传统节日 / 节气（纯函数，1900–2100）
       db.js                  IndexedDB
       sync.js                发现 + 同步 + 调中枢 AI 复盘
-      notify.js              本地通知（AlarmManager）
+      notify.js              本地通知（AlarmManager；checkin / court 两个渠道 + 通知自检）
       merge.js               由 hub/merge.mjs 复制
       member-id.js           由 shared/id.mjs 复制
       court-state.js         国事合并规则（由 shared/court-state.mjs 复制）
@@ -85,16 +87,21 @@ tools\build-apk.cmd
 
 REM 产物
 app\android\app\build\outputs\apk\debug\app-debug.apk
+REM 发布副本
+dist\大内家事-1.1-debug.apk
 ```
+
+当前版本：`versionCode 2` / `versionName 1.1`（`app/android/app/build.gradle`）。
 
 测试（都在本机跑，不需要手机）：
 
 ```bat
-node app\test\core.test.mjs           REM 状态机 + 提醒排期 + 日历 + 保留期 + 文本导出（16 例）
-node app\test\ui.smoke.test.mjs       REM jsdom 界面：两页 / 点圈进度 / 内阁 / 六部行 / 传旨（26 例）
+node app\test\core.test.mjs           REM 状态机 + 提醒排期（含到点差事）+ 日历 + 保留期 + 文本导出（17 例）
+node app\test\ui.smoke.test.mjs       REM jsdom 界面：两页 / 点圈进度 / 内阁 / 六部行 / 传旨 / 到点输入（26 例）
+node app\test\lunar.test.mjs          REM 农历/节日/闰月/日历小字（7 例）
 node app\test\dashboard.dom.test.mjs  REM jsdom + 真中枢：看板点卡片切人、点天数出复盘（8 例）
 node app\test\court-local.test.mjs    REM 国事本机逻辑：合并 / 墓碑 / 限调 3 次 / 多笔账（6 例）
-node hub\test\merge.test.mjs          REM 合并规则（12 例）
+node hub\test\merge.test.mjs          REM 合并规则（13 例）
 node hub\test\net.test.mjs            REM 网卡筛选 / 子网广播 / 热点识别（5 例）
 node hub\test\sync-e2e.test.mjs       REM 端到端同步 + 保留期 + CORS + 缓存 + 成员详情（28 例）
 node hub\test\court-e2e.test.mjs      REM 大内家事：权限/缓存/批阅/传旨/国事同步/账簿（21 例）
@@ -104,13 +111,26 @@ node test\format.test.mjs             REM 手机/电脑导出格式一致（2 �
 node test\court.test.mjs              REM 账本解析 + 批阅状态机 + 人格 + 缓存（10 例）
 node test\gym.test.mjs                REM 训练场评分（5 例）
 node test\pricing.test.mjs            REM 中枢账房：峰谷价 / 缓存 0 元 / 汇总金额（6 例）
-node test\dispatch.test.mjs           REM 司礼监传旨：三类事（内阁带预算 / 今日 / 六部）与模型 JSON 过筛（8 例）
+node test\dispatch.test.mjs           REM 司礼监传旨：三类事 + 到点识别 + 模型 JSON 过筛（9 例）
 ```
 
-共 165 例。
+共 175 例。
 
 > 注意：`node --test` 会为每个文件 spawn 子进程，本机沙箱下会报 `spawn EPERM`，
 > 所以直接 `node <文件>`（node:test 在进程内跑）。
+
+### 4.1 提醒不响怎么查
+
+- 提醒全部走 `@capacitor/local-notifications`（Android AlarmManager），**不要求 WebView 常驻后台**；
+  App 打开 / 数据变化 / 回到前台时，`applyPlan()` 把未来提醒重新排给系统，系统到点自己弹。
+- App 侧顺序：`ensureChannel()`（`checkin` + `court`）→ `ensurePermission()` → `applyPlan(records, now, courtState)`。
+- 「朕的私事 → 提醒」的**通知自检**会显示：通知权限、精确闹钟、渠道、待发条数、下一条时刻；
+  另有三颗按钮：`准点闹钟设置`（`changeExactNotificationSetting`）、`补排提醒`（重新 `applyPlan`）、`发测试通知`（3 秒后）。
+- 手机系统侧仍可能拦截：Android 13+ 通知权限被拒、Android 12+ 精确闹钟未允许、厂商省电策略清掉闹钟。
+  需在系统设置里允许「大内家事」通知 / 精确闹钟 / 自启动，并把电池策略设为「不限制」。
+- 到点提醒的稳定性：`planReminders` 用 `goal:<id>` / `task:<dept>:<id>` 的 FNV-1a 哈希生成稳定 id
+  （goal 基数 100000、task 基数 200000），同一差事改时间会覆盖同一条，不会越排越多。
+- 版本升级（`versionCode`）会刷新 launcher 图标；若仍显示旧图标，先确认装的是新 APK，再卸载重装或重启桌面。
 
 ## 5. 网络：三种家用接法都要能同步
 

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEPT_NAMES, DISPATCH_DEPTS, routeByRules, sanitizeDispatchItems, clipTask, findBudget,
+  findDue, normalizeDue,
 } from '../shared/dispatch-rules.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -106,6 +107,38 @@ test('模型吐出的 JSON 要过筛：三类都收、只收六部、去重、�
   assert.ok(tasksOf(items).some((i) => i.dept === 'bingbu' && i.text === '旧式形状也要收'));
   assert.equal(sanitizeDispatchItems(null, { fallbackText: '周六去吃火锅' }).length > 0, true, '模型没吐出东西时按规矩兜底');
   assert.equal(clipTask('  a   b  '), 'a b');
+});
+
+test('传旨带钟点：今天/明早/周六都能算出北京时间，已过点不硬排', () => {
+  const now = new Date('2026-11-19T09:00:00+08:00'); // 周四上午九点
+  assert.equal(findDue('今天下午三点开会', now), '2026-11-19T15:00+08:00');
+  assert.equal(findDue('今晚六点吃饭', now), '2026-11-19T18:00+08:00');
+  assert.equal(findDue('明早八点出发', now), '2026-11-20T08:00+08:00');
+  assert.equal(findDue('周六上午十点去公园', now), '2026-11-21T10:00+08:00');
+  assert.equal(findDue('今天上午八点已经过了', now), null, '明说今天又已过点，不排旧提醒');
+  assert.equal(findDue('周六去公园', now), null, '只说日期没说钟点，不硬塞闹钟');
+  assert.equal(findDue('下午三点', now), '2026-11-19T15:00+08:00', '只说钟点、还没到，算今天');
+
+  // 模型给的 due 也过筛：未来 60 天内才收
+  assert.equal(normalizeDue('2026-11-19T15:00+08:00', now), '2026-11-19T15:00+08:00');
+  assert.equal(normalizeDue('2026-11-19 15:00', now), '2026-11-19T15:00+08:00', '没带时区按北京时间');
+  assert.equal(normalizeDue('2026-11-19T08:00+08:00', now), null, '过去的 due 不收');
+  assert.equal(normalizeDue('2027-03-01T08:00+08:00', now), null, '太远的 due 不收');
+
+  const items = sanitizeDispatchItems({
+    items: [
+      { kind: 'goal', text: '下午三点接孩子', due: '2026-11-19T15:00+08:00' },
+      { kind: 'task', dept: 'bingbu', task: '五点前去学校', due: '2026-11-19T17:00+08:00' },
+      { kind: 'annual', text: '今年攒两万', budget: 20000, due: '2026-11-20T10:00+08:00' },
+    ],
+  }, { now });
+  assert.equal(items.find((i) => i.kind === 'goal').due, '2026-11-19T15:00+08:00');
+  assert.equal(items.find((i) => i.kind === 'task').due, '2026-11-19T17:00+08:00');
+  assert.equal(items.find((i) => i.kind === 'annual').due, undefined, 'annual 不带 due');
+
+  const routed = routeByRules('今天下午四点去接孩子，兵部定路线', now);
+  assert.equal(routed.items.find((i) => i.kind === 'goal').due, '2026-11-19T16:00+08:00');
+  assert.equal(routed.items.find((i) => i.kind === 'task').due, null, '另一句没说钟点，不硬塞');
 });
 
 test('每部只留一句简短职责，App 离线也用得上', async () => {

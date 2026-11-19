@@ -35,6 +35,139 @@ export const clipTask = (text, max = 80) => {
 const TODAY_RE = /今天|今日|今晚|明早|明天|每天|每日|本周内/;
 const ANNUAL_RE = /今年|本年|年度|全年|预算|攒|年终/;
 
+/* ------------------------------ 时刻 ------------------------------ */
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** 北京时间的年/月/日/时/分 */
+function bjParts(now) {
+  const s = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(now);
+  const [date, time] = s.split(' ');
+  const [y, mo, d] = date.split('-').map(Number);
+  const [h, mi] = time.split(':').map(Number);
+  return { y, mo, d, h, mi, date };
+}
+
+/** 北京时间的 ISO 字符串：2026-11-19T15:00+08:00 */
+export function bjIso(y, mo, d, h, mi = 0) {
+  return `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}+08:00`;
+}
+
+function parseCnInt(s) {
+  const n = cnNumber(String(s ?? '').trim());
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+/** 从一句话里认时刻：下午三点半、15:30、八点……认不出返回 null */
+function findTime(text) {
+  const t = String(text ?? '');
+  const colon = /(\d{1,2})\s*[:：]\s*(\d{1,2})/.exec(t);
+  if (colon) {
+    const h = Number(colon[1]);
+    const mi = Number(colon[2]);
+    if (h >= 0 && h <= 23 && mi >= 0 && mi <= 59) return { h, mi };
+  }
+  const m = /(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|今晚|明晚|夜里|夜间)?\s*(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*(?:点|時|时)\s*(半|\d{1,2}|[一二两三四五六七八九十]{1,3})?\s*分?/.exec(t);
+  if (!m) return null;
+  let h = parseCnInt(m[2]);
+  if (h === null || h < 0 || h > 23) return null;
+  let mi = 0;
+  if (m[3] === '半') mi = 30;
+  else if (m[3]) {
+    const parsed = parseCnInt(m[3]);
+    if (parsed === null || parsed < 0 || parsed > 59) return null;
+    mi = parsed;
+  }
+  const period = m[1] ?? '';
+  if ((period === '下午' || period === '傍晚' || period === '晚上' || period === '今晚' || period === '明晚' || period === '夜里' || period === '夜间') && h < 12) h += 12;
+  if (period === '中午' && h < 11) h += 12;
+  if (period === '凌晨' && h === 12) h = 0;
+  return { h, mi };
+}
+
+/** 北京时间的“今天”零点，用 UTC 表示，方便加减天数 */
+function bjMidnightMs(y, mo, d) {
+  return Date.UTC(y, mo - 1, d) - 8 * 3600 * 1000;
+}
+
+/**
+ * 从口谕里找“什么时候办”。
+ * 只认带钟点的（“周六”不算），免得把没定时间的差事硬塞个闹钟。
+ * 返回 +08:00 的 ISO；认不出、或给的是已经过去的“今天几点”，返回 null。
+ */
+export function findDue(text, now = new Date()) {
+  const t = String(text ?? '');
+  const time = findTime(t);
+  if (!time) return null;
+  const base = bjParts(now);
+  const todayMs = bjMidnightMs(base.y, base.mo, base.d);
+  let dayMs = todayMs;
+  let explicitToday = false;
+
+  const explicit = /(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/.exec(t);
+  if (explicit) {
+    const mo = Number(explicit[1]);
+    const d = Number(explicit[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    let y = base.y;
+    if (mo < base.mo || (mo === base.mo && d < base.d)) y += 1;
+    dayMs = bjMidnightMs(y, mo, d);
+  } else if (/大后天/.test(t)) {
+    dayMs = todayMs + 3 * 86400000;
+  } else if (/后天/.test(t)) {
+    dayMs = todayMs + 2 * 86400000;
+  } else if (/明天|明日|明早|明晚/.test(t)) {
+    dayMs = todayMs + 86400000;
+  } else if (/今天|今日|今晚|今夜/.test(t)) {
+    explicitToday = true;
+  } else {
+    const wd = /(下周|下星期|下礼拜|周|星期|礼拜)\s*([一二三四五六日天])/.exec(t);
+    if (wd) {
+      const map = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
+      const target = map[wd[2]];
+      const cur = new Date(Date.UTC(base.y, base.mo - 1, base.d)).getUTCDay();
+      const curMon = (cur + 6) % 7;
+      const targetMon = (target + 6) % 7;
+      let delta = (targetMon - curMon + 7) % 7;
+      if (wd[1].startsWith('下') && delta === 0) delta = 7;
+      dayMs = todayMs + delta * 86400000;
+    }
+  }
+
+  const atMs = dayMs + (time.h * 3600 + time.mi * 60) * 1000;
+  if (explicitToday) {
+    // 主上明说“今天三点”，已经过点了就不排（免得一确认就弹旧提醒）
+    return atMs > now.getTime() ? bjIso(base.y, base.mo, base.d, time.h, time.mi) : null;
+  }
+  // 只说“三点”没说哪天：过点了就顺到明天
+  if (atMs <= now.getTime()) {
+    const p = bjParts(new Date(dayMs + 86400000));
+    return bjIso(p.y, p.mo, p.d, time.h, time.mi);
+  }
+  const p = bjParts(new Date(atMs));
+  return bjIso(p.y, p.mo, p.d, time.h, time.mi);
+}
+
+/** 校验并规范化模型给的 due；必须是未来 60 天内 */
+export function normalizeDue(value, now = new Date()) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  let ms = Date.parse(raw);
+  // 模型常给“2026-11-19 15:00”这种没带时区的，按北京时间算
+  if (Number.isFinite(ms) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) {
+    ms = Date.parse(`${raw.replace(' ', 'T')}+08:00`);
+  }
+  if (!Number.isFinite(ms)) return null;
+  if (ms <= now.getTime() || ms > now.getTime() + 60 * 86400000) return null;
+  const p = bjParts(new Date(ms));
+  return bjIso(p.y, p.mo, p.d, p.h, p.mi);
+}
+
+
 /* ------------------------------ 银钱估算 ------------------------------ */
 
 const CN_DIGIT = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
@@ -115,7 +248,7 @@ const splitClauses = (text) => String(text ?? '')
  * 按关键词拆旨（确定性、免费、断网可用）。
  * 一段话里可能同时有内阁大事、今日差事、六部差事，各归各堆。
  */
-export function routeByRules(text) {
+export function routeByRules(text, now = new Date()) {
   const t = String(text ?? '').trim();
   if (!t) return { items: [], matched: [] };
   const hasToday = TODAY_RE.test(t);
@@ -134,7 +267,7 @@ export function routeByRules(text) {
     }
     if (TODAY_RE.test(clause)) {
       const body = clause.replace(/^(今天|今日|今晚|明早|明天|每天|每日)[，,]?\s*/, '').trim();
-      if (body) goals.push(body);
+      if (body) goals.push({ text: body, due: findDue(clause, now) });
       continue;
     }
     const hits = RULES.filter((r) => r.words.some((w) => clause.includes(w)));
@@ -142,10 +275,10 @@ export function routeByRules(text) {
       for (const rule of hits) {
         if (seenDept.has(rule.dept)) continue;
         seenDept.add(rule.dept);
-        tasks.push({ kind: 'task', dept: rule.dept, text: clipTask(rule.make(clause)) });
+        tasks.push({ kind: 'task', dept: rule.dept, text: clipTask(rule.make(clause)), due: findDue(clause, now) });
       }
     } else if (hasToday) {
-      goals.push(clause);
+      goals.push({ text: clause, due: findDue(clause, now) });
     }
   }
 
@@ -157,19 +290,19 @@ export function routeByRules(text) {
 
   const seenGoal = new Set();
   for (const g of goals) {
-    const text = clipTask(g);
+    const text = clipTask(g.text);
     if (!text || seenGoal.has(text)) continue;
     seenGoal.add(text);
-    items.push({ kind: 'goal', text });
+    items.push({ kind: 'goal', text, due: g.due ?? null });
     if (seenGoal.size >= 5) break;
   }
 
   items.push(...tasks);
 
   if (!items.length) {
-    if (hasToday) items.push({ kind: 'goal', text: clipTask(t) });
+    if (hasToday) items.push({ kind: 'goal', text: clipTask(t), due: findDue(t, now) });
     else if (hasAnnual) items.push({ kind: 'annual', text: clipTask(t), budget: findBudget(t), period: 'year' });
-    else items.push({ kind: 'task', dept: 'libu2', text: clipTask(`先行统筹此事：${t}`) });
+    else items.push({ kind: 'task', dept: 'libu2', text: clipTask(`先行统筹此事：${t}`), due: findDue(t, now) });
   }
 
   return {
@@ -179,7 +312,7 @@ export function routeByRules(text) {
 }
 
 /** 把模型吐出来的东西收成统一形状；兼容旧式 {dept, task} */
-export function sanitizeDispatchItems(raw, { fallbackText = '' } = {}) {
+export function sanitizeDispatchItems(raw, { fallbackText = '', now = new Date() } = {}) {
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.items) ? raw.items : [];
   const out = [];
   const seenTaskDept = new Set();
@@ -205,18 +338,19 @@ export function sanitizeDispatchItems(raw, { fallbackText = '' } = {}) {
       annualCount += 1;
       continue;
     }
+    const due = normalizeDue(item?.due, now) ?? findDue(`${item?.text ?? ''} ${item?.task ?? ''}`, now);
     if (kind === 'goal') {
       if (seenGoal.has(text)) continue;
       seenGoal.add(text);
-      out.push({ kind: 'goal', text });
+      out.push({ kind: 'goal', text, due });
       continue;
     }
     const dept = String(item?.dept ?? '').trim();
     if (!DISPATCH_DEPTS.includes(dept) || seenTaskDept.has(dept)) continue;
     seenTaskDept.add(dept);
-    out.push({ kind: 'task', dept, text });
+    out.push({ kind: 'task', dept, text, due });
   }
 
-  if (!out.length && String(fallbackText ?? '').trim()) return routeByRules(fallbackText).items;
+  if (!out.length && String(fallbackText ?? '').trim()) return routeByRules(fallbackText, now).items;
   return out.slice(0, 10);
 }

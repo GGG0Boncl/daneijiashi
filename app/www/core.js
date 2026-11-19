@@ -102,18 +102,20 @@ function touch(rec, now) {
   };
 }
 
-export function addGoal(rec, text, now = new Date()) {
+export function addGoal(rec, text, now = new Date(), { due = null } = {}) {
   const t = String(text ?? '').trim();
   if (!t) throw new Error('目标内容不能为空');
   if (t.length > 60) throw new Error('目标太长啦，60 字以内比较好记');
   const goals = rec.goals ?? [];
   if (goals.some((g) => !g.deleted && g.text === t)) throw new Error('这条目标已经在了');
+  const dueMs = due ? Date.parse(due) : NaN;
   const goal = {
     id: nextGoalId(goals),
     text: t,
     progress: 0,
     status: 'pending',
     checkedAt: null,
+    due: Number.isFinite(dueMs) ? bjParts(new Date(dueMs)).iso : null,
     note: '',
     createdAt: bjIso(now),
     updatedAt: bjIso(now),
@@ -186,7 +188,7 @@ export function removeGoal(rec, goalId, now = new Date()) {
  *          未来 6 天每天都排 07:30（到点那天必然还没提交过当天目标）。
  * 21:30 —— 只给"今天提交过 + 还有未打卡"排；没提交的人绝不排。
  */
-export function planReminders(records, now = new Date()) {
+export function planReminders(records, now = new Date(), courtState = null) {
   const { date: today, minutes } = bjParts(now);
   const rec = (records ?? []).find((r) => r.date === today) ?? null;
   const goals = liveGoals(rec);
@@ -220,6 +222,54 @@ export function planReminders(records, now = new Date()) {
       body: `你今日的目标还没有完成打卡，请及时打卡：\n${shown}${more}`,
       extra: { date: today, pending: pending.length },
     });
+  }
+
+  /* 差事到点：今日差事与六部差事，只排未办完、带 due、且在未来 60 天内的 */
+  const deptNames = {
+    libu: '吏部', hubu: '户部', libu2: '礼部', bingbu: '兵部',
+    xingbu: '刑部', gongbu: '工部', silijian: '司礼监',
+  };
+  const duePlan = [];
+  const addDue = (base, key, at, text, label) => {
+    const atText = String(at ?? '');
+    const ms = Date.parse(atText);
+    if (!Number.isFinite(ms)) return;
+    if (ms <= now.getTime() || ms > now.getTime() + 60 * 86400000) return;
+    if (!String(text ?? '').trim()) return;
+    let h = 2166136261;
+    for (let i = 0; i < key.length; i += 1) {
+      h ^= key.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    const id = base + ((h >>> 0) % 900000);
+    duePlan.push({
+      id,
+      kind: 'due',
+      at: atText.includes('T') ? atText : `${atText}T00:00:00+08:00`,
+      title: `⏰ ${label}到点了`,
+      body: text,
+      extra: { due: atText },
+    });
+  };
+
+  for (const g of goals) {
+    if (g.status === 'done' || goalProgress(g) >= 100) continue;
+    addDue(100000, `goal:${g.id}`, g.due, g.text, '今日差事');
+  }
+  const tasksByDept = courtState?.tasks ?? {};
+  for (const [dept, section] of Object.entries(tasksByDept)) {
+    for (const item of section?.items ?? []) {
+      if (item.status === 'done' || Number(item.progress) >= 100) continue;
+      addDue(200000, `task:${dept}:${item.id}`, item.due, item.text, `${deptNames[dept] ?? '部里'}差事`);
+    }
+  }
+
+  // 同一个到点时刻撞了 id 就顺手让开，免得 Android 覆盖前一条
+  const used = new Set();
+  for (const p of duePlan) {
+    while (used.has(p.id)) p.id += 1;
+    used.add(p.id);
+    plan.push(p);
   }
 
   return plan;

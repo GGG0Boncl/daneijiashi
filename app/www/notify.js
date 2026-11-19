@@ -37,11 +37,19 @@ export async function ensurePermission() {
 }
 
 /** 把计划同步到系统，返回本次实际排上的条数 */
-export async function applyPlan(records, now = new Date()) {
+export async function applyPlan(records, now = new Date(), courtState = undefined) {
   const ln = plugin();
   if (!ln?.schedule) return { applied: 0, reason: 'no-plugin' };
 
-  const plan = planReminders(records, now);
+  let court = courtState;
+  if (court === undefined) {
+    try {
+      court = (await store.getMeta('courtState', null)) ?? null;
+    } catch {
+      court = null;
+    }
+  }
+  const plan = planReminders(records, now, court);
   const ids = plan.map((p) => p.id);
   const prev = (await store.getMeta(SCHEDULED_KEY, [])) ?? [];
   const toCancel = prev.filter((id) => !ids.includes(id));
@@ -57,9 +65,9 @@ export async function applyPlan(records, now = new Date()) {
           title: p.title,
           body: p.body,
           largeBody: p.body,
-          summaryText: p.kind === '0730' ? '设个今天的小目标吧' : '别忘了打卡',
+          summaryText: p.kind === '0730' ? '设个今天的小目标吧' : p.kind === 'due' ? '差事到点了' : '别忘了打卡',
           schedule: { at: new Date(p.at), allowWhileIdle: true },
-          channelId: 'checkin',
+          channelId: p.kind === 'due' ? 'court' : 'checkin',
           autoCancel: true,
         })),
       });
@@ -72,21 +80,94 @@ export async function applyPlan(records, now = new Date()) {
   }
 }
 
-/** 首次启动建一个通知渠道（Android 8+ 需要），失败不影响主流程 */
+/** 首次启动建通知渠道（Android 8+ 需要），失败不影响主流程 */
 export async function ensureChannel() {
   const ln = plugin();
   if (!ln?.createChannel) return;
-  try {
-    await ln.createChannel({
+  const channels = [
+    {
       id: 'checkin',
       name: '打卡提醒',
       description: '每天 07:30 设目标提醒、21:30 打卡提醒',
       importance: 4,
       visibility: 1,
       vibration: true,
-    });
+    },
+    {
+      id: 'court',
+      name: '差事到点',
+      description: '传旨时定了钟点的差事，到点提醒',
+      importance: 5,
+      visibility: 1,
+      vibration: true,
+    },
+  ];
+  for (const channel of channels) {
+    try {
+      await ln.createChannel(channel);
+    } catch (err) {
+      console.warn(`创建通知渠道 ${channel.id} 失败`, err);
+    }
+  }
+}
+
+/** 通知自检：权限、精确闹钟、渠道、已排的提醒，都给设置页看 */
+export async function notificationStatus() {
+  const ln = plugin();
+  if (!ln) {
+    return {
+      available: false,
+      permission: 'unavailable',
+      exact: 'unavailable',
+      channels: [],
+      pending: [],
+      reason: '当前不是 App 环境',
+    };
+  }
+  const out = {
+    available: Boolean(ln.schedule),
+    permission: 'unknown',
+    exact: 'unknown',
+    channels: [],
+    pending: [],
+    reason: '',
+  };
+  try {
+    out.permission = (await ln.checkPermissions())?.display ?? 'unknown';
   } catch (err) {
-    console.warn('创建通知渠道失败', err);
+    out.reason = String(err?.message ?? err);
+  }
+  try {
+    out.exact = (await ln.checkExactNotificationSetting())?.exact_alarm ?? 'unknown';
+  } catch {
+    out.exact = 'unavailable';
+  }
+  try {
+    out.channels = ((await ln.listChannels())?.channels ?? []).map((c) => ({ id: c.id, name: c.name }));
+  } catch {
+    /* 旧系统没有渠道 */
+  }
+  try {
+    out.pending = ((await ln.getPending())?.notifications ?? []).map((n) => ({
+      id: n.id,
+      title: n.title,
+      at: n.schedule?.at ?? null,
+    }));
+  } catch {
+    /* 拿不到待发列表不影响主流程 */
+  }
+  return out;
+}
+
+/** 去系统里打开“精确闹钟”权限（Android 12+ 可能默认不给） */
+export async function openExactAlarmSetting() {
+  const ln = plugin();
+  if (!ln?.changeExactNotificationSetting) return { ok: false, reason: '这版 App 不支持' };
+  try {
+    const s = await ln.changeExactNotificationSetting();
+    return { ok: true, exact: s?.exact_alarm ?? 'unknown' };
+  } catch (err) {
+    return { ok: false, reason: String(err?.message ?? err) };
   }
 }
 

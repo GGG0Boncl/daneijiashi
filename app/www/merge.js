@@ -7,7 +7,7 @@
  * 记录结构（与 checkin.mjs 对齐，另加同步字段）：
  * {
  *   memberId, memberName, date, version, submittedAt, updatedAt, deviceId,
- *   goals: [{ id, text, status, checkedAt, note, createdAt, updatedAt, deleted }]
+ *   goals: [{ id, text, status, checkedAt, due, note, createdAt, updatedAt, deleted }]
  * }
  */
 
@@ -54,6 +54,7 @@ function normalizeGoal(g) {
     status,
     progress,
     checkedAt: g.status === 'pending' ? null : toBjIso(g.checkedAt),
+    due: g.due ? toBjIso(g.due) : null,
     note: g.note ?? '',
     createdAt: toBjIso(g.createdAt),
     updatedAt: toBjIso(g.updatedAt ?? g.createdAt),
@@ -102,7 +103,7 @@ export function mergeRecord(local, remote) {
     JSON.stringify(
       [...goals]
         .sort((x, y) => String(x.id).localeCompare(String(y.id), undefined, { numeric: true }))
-        .map((g) => [g.id, g.text, g.status, g.checkedAt, g.note, g.createdAt, g.updatedAt, g.deleted]),
+        .map((g) => [g.id, g.text, g.status, g.checkedAt, g.due, g.note, g.createdAt, g.updatedAt, g.deleted]),
     );
   const changed = canonical(a.goals) !== canonical(b.goals);
 

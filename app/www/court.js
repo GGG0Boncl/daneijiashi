@@ -5,7 +5,7 @@
  * 没连中枢也照常加国家大事、下旨、记流水；连上后由 syncCourtNow() 整份推上去合并。
  */
 import {
-  ANNUAL_ADJUST_LIMIT, ANNUAL_PERIOD, DEPT_IDS, annualSummary, clampPct,
+  ANNUAL_ADJUST_LIMIT, ANNUAL_PERIOD, DEPT_IDS, annualSummary, bjIsoFromMs, clampPct,
   emptyCourtState, mergeCourtState, normalizeCourtState, taskSummary,
 } from './court-state.js';
 import { parseLedgerText, summarizeLedger } from './ledger.js';
@@ -121,11 +121,12 @@ const section = (state, dept) => {
   return state.tasks[dept];
 };
 
-export function addTaskLocal(state, dept, { text, by = null, progress = 0 } = {}) {
+export function addTaskLocal(state, dept, { text, by = null, progress = 0, due = null } = {}) {
   if (!DEPT_IDS.includes(dept)) throw new Error(`没有这个部：${dept}`);
   const t = String(text ?? '').trim();
   if (!t) throw new Error('圣旨总得写句话');
   if (t.length > 80) throw new Error('旨意写短点，80 字以内');
+  const dueMs = due ? Date.parse(due) : NaN;
   const s = normalizeCourtState(state);
   const at = isoOf(new Date());
   const p = clampPct(progress);
@@ -136,6 +137,7 @@ export function addTaskLocal(state, dept, { text, by = null, progress = 0 } = {}
     note: '',
     progress: p,
     status: p >= 100 ? 'done' : p > 0 ? 'doing' : 'pending',
+    due: Number.isFinite(dueMs) ? bjIsoFromMs(dueMs) : null,
     by: by ?? null,
     createdAt: at,
     updatedAt: at,
@@ -156,6 +158,10 @@ export function updateTaskLocal(state, dept, id, patch = {}) {
     const t = String(patch.text).trim();
     if (!t) throw new Error('内容不能为空');
     item.text = t;
+  }
+  if (patch.due !== undefined) {
+    const dueMs = patch.due ? Date.parse(patch.due) : NaN;
+    item.due = patch.due && Number.isFinite(dueMs) ? bjIsoFromMs(dueMs) : null;
   }
   touch(item);
   return s;

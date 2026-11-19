@@ -128,6 +128,19 @@ test('非法的 status 会被归一成 pending，缺 id 直接报错', () => {
   assert.throws(() => mergeRecord(null, rec({ goals: [{ text: '没有id' }] })), /id/);
 });
 
+test('到点时刻随差事一起合并：due 保留、晚者胜', () => {
+  const m = mergeRecord(null, rec({ goals: [g('g1', { due: '2026-11-18T17:00:00+08:00' })] }));
+  assert.equal(m.goals[0].due, '2026-11-18T17:00:00+08:00');
+
+  const local = rec({ goals: [g('g1', { due: '2026-11-18T16:00:00+08:00' })] });
+  const remote = rec({
+    updatedAt: '2026-11-18T20:00:00+08:00',
+    goals: [g('g1', { due: '2026-11-18T18:00:00+08:00', updatedAt: '2026-11-18T20:00:00+08:00' })],
+  });
+  assert.equal(mergeRecord(local, remote).goals[0].due, '2026-11-18T18:00:00+08:00');
+  assert.equal(mergeRecord(remote, local).goals[0].due, '2026-11-18T18:00:00+08:00', '旧的本机 due 不能盖回去');
+});
+
 test('UTC 时间统一落成北京时间，避免"晚者胜"和展示错乱', () => {
   assert.equal(toBjIso('2026-11-18T03:27:26.595Z'), '2026-11-18T11:27:26+08:00');
   assert.equal(toBjIso('2026-11-18T11:27:26+08:00'), '2026-11-18T11:27:26+08:00');

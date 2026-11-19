@@ -162,6 +162,7 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     await flush(240);
     assert.match($('#dispatchResult').textContent, /今日差事/);
     assert.equal(document.querySelectorAll('[data-dispatch-pick]').length, 2);
+    assert.equal(document.querySelectorAll('[data-dispatch-due]').length, 2, '每条今日差事都能定到点');
     $('#dispatchConfirm').click();
     await flush(260);
     assert.equal($('#sheetMask'), null);
@@ -257,6 +258,7 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     await flush(70);
     assert.match($('#deptTaskInput').placeholder, /给兵部下旨/);
     assert.ok(!$('#deptTaskInput').placeholder.includes('湿地公园'), '举例已删');
+    assert.ok($('#deptTaskDue'), '部里下旨也能定到点');
     assert.match($('#sheetMask').textContent, /职责：管出行安全/);
     $('#deptClose').click();
     await flush(40);
@@ -305,11 +307,17 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     assert.equal(picked, 2);
   });
 
-  await t.test('钦天监：讲清它是干什么的，离线按钮灰', () => {
+  await t.test('钦天监：讲清它是干什么的，直接填天数，离线按钮灰', () => {
     assert.match($('#aiCard').textContent, /此为何用/);
-    const btns = [...$('#aiCard').querySelectorAll('[data-ai-days]')];
-    assert.ok(btns.length >= 3);
-    assert.ok(btns.every((b) => b.disabled));
+    const input = $('#aiDaysInput');
+    assert.ok(input, '应有一个填天数的输入框');
+    assert.equal(input.type, 'number');
+    assert.equal(input.min, '1');
+    assert.equal(input.max, '365');
+    assert.ok(input.disabled);
+    const run = $('#aiRun');
+    assert.ok(run);
+    assert.ok(run.disabled);
   });
 
   await t.test('中枢账房：一行小字带上花费金额', () => {

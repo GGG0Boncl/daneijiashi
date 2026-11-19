@@ -282,6 +282,34 @@ test('导出格式：2026年11月18日：事项1；事项2。一天一行', () =
   ].join('\n'));
 });
 
+test('到点提醒：今日差事与六部差事带 due 的排上，办成的与过点的不排', () => {
+  const now = at('2026-11-18T07:00:00+08:00');
+  let r = addGoal(rec(), '接孩子', now, { due: '2026-11-18T17:00+08:00' });
+  assert.equal(r.goals[0].due, '2026-11-18T17:00:00+08:00');
+  const court = {
+    tasks: {
+      bingbu: {
+        items: [
+          { id: 't1', text: '去学校接孩子', due: '2026-11-18T16:00:00+08:00', progress: 0, status: 'pending' },
+          { id: 't2', text: '已经办成的', due: '2026-11-18T18:00:00+08:00', progress: 100, status: 'done' },
+          { id: 't3', text: '过点的不排', due: '2026-11-18T06:00:00+08:00', progress: 0, status: 'pending' },
+        ],
+      },
+    },
+  };
+  const plan = planReminders([r], now, court);
+  const due = plan.filter((p) => p.kind === 'due');
+  assert.equal(due.length, 2, '一条今日差事、一条兵部差事');
+  assert.ok(due.some((p) => p.title.includes('今日差事') && p.body === '接孩子'));
+  assert.ok(due.some((p) => p.title.includes('兵部') && p.body === '去学校接孩子'));
+  assert.ok(due.every((p) => p.id >= 100000));
+
+  // 勾成 100% 后，差事到点提醒就该撤
+  const doneRec = setGoalStatus(r, 'g1', 'done', at('2026-11-18T08:00:00+08:00'));
+  const after = planReminders([doneRec], now, { tasks: { bingbu: { items: [] } } });
+  assert.equal(after.filter((p) => p.kind === 'due').length, 0, '办成的差事不再响');
+});
+
 test('导出细节：按日期排序、跳过空日、删除的目标不出现、分号会被清理', () => {
   const empty = rec({ date: '2026-11-17' });
   const withDeleted = removeGoal(

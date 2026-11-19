@@ -32,6 +32,24 @@ export function asTime(value) {
 
 export const clampPct = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** 毫秒 → 北京时间 ISO（差事的“到点”用它，跨端才不会差八小时） */
+export function bjIsoFromMs(ms) {
+  const s = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(ms));
+  return `${s.replace(' ', 'T')}+08:00`;
+}
+
+function cleanDue(value) {
+  if (!value) return null;
+  const t = asTime(value);
+  return t > 0 ? bjIsoFromMs(t) : null;
+}
+
 const str = (v, max = 200) => String(v ?? '').slice(0, max);
 
 export function validId(id) {
@@ -103,6 +121,7 @@ export function normalizeTask(raw, dept) {
     note: str(raw?.note, 200),
     progress,
     status: progress >= 100 ? 'done' : progress > 0 ? 'doing' : 'pending',
+    due: cleanDue(raw?.due),
     by: raw?.by ? str(raw.by, 40) : null,
     createdAt,
     updatedAt,

@@ -4,6 +4,7 @@
  */
 import * as core from './core.js';
 import * as court from './court.js';
+import * as lunar from './lunar.js';
 import { COURT_DEPTS as DEFAULT_DEPTS } from './depts.js';
 import { DEPT_NAMES, routeByRules, sanitizeDispatchItems } from './dispatch-rules.js';
 import { store } from './db.js';
@@ -15,7 +16,8 @@ import {
   getUsage, pushCourtState, uploadAvatar,
 } from './sync.js';
 import {
-  applyPlan, ensurePermission, ensureChannel, notificationsAvailable, sendTestNotification,
+  applyPlan, ensurePermission, ensureChannel, sendTestNotification,
+  notificationStatus, openExactAlarmSetting,
 } from './notify.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -25,7 +27,7 @@ const state = {
   identity: null,
   hub: { url: '', token: '', lastSyncAt: null, lastError: null, hubTime: null },
   ui: { showAll: {} },
-  ai: { available: null, model: null, days: [7, 14, 30, 90], reason: null, history: [], loadingHistory: false },
+  ai: { available: null, model: null, days: [7, 14, 30, 90], lastDays: 30, reason: null, history: [], loadingHistory: false },
   court: {
     config: null,
     memorials: [],
@@ -74,6 +76,32 @@ function dayOfWeek(date) {
 function fmtDateTime(iso) {
   if (!iso) return '—';
   return `${iso.slice(5, 10)} ${iso.slice(11, 16)}`;
+}
+
+/** 到点提醒的统一写法：今天/明天只写时刻，往后写月日 */
+function dueLabel(due) {
+  const ms = Date.parse(String(due ?? ''));
+  if (!Number.isFinite(ms)) return '';
+  const p = core.bjParts(new Date(ms));
+  const time = p.time.slice(0, 5);
+  if (p.date === core.bjToday()) return `⏰ 今天 ${time}`;
+  if (p.date === core.addDays(core.bjToday(), 1)) return `⏰ 明天 ${time}`;
+  return `⏰ ${p.date.slice(5).replace('-', '/')} ${time}`;
+}
+
+/** datetime-local 的值按北京时间转成带 +08:00 的 ISO */
+function dueFromInput(value) {
+  const v = String(value ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) return null;
+  return `${v}:00+08:00`;
+}
+
+/** 把 ISO 的到点时刻填回 datetime-local */
+function dueToInput(due) {
+  const ms = Date.parse(String(due ?? ''));
+  if (!Number.isFinite(ms)) return '';
+  const p = core.bjParts(new Date(ms));
+  return `${p.date}T${p.time.slice(0, 5)}`;
 }
 
 /** 小额也留 4 位：调一次模型常常只花几厘钱 */
@@ -151,9 +179,12 @@ async function updateDay(date, mutator) {
 
 const updateToday = (fn) => updateDay(core.bjToday(), fn);
 
+/** 重排提醒：打卡计划 + 国事里带钟点的差事 */
+const replan = () => applyPlan(state.records, new Date(), state.court.state);
+
 let syncTimer = null;
 function afterChange() {
-  void applyPlan(state.records);
+  void replan();
   markDirty();
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => { void runSync(false); }, 1500);
@@ -204,7 +235,7 @@ async function runSync(manual = false) {
     renderSyncPill();
     await store.setMeta('lastSyncAt', res.serverTime);
     if (manual) toast(`同步完成，中枢写入了 ${res.written ?? 0} 天`);
-    await applyPlan(state.records);
+    await applyPlan(state.records, new Date(), state.court.state);
     void loadAiInfo();
     void loadAiHistory();
     render();
@@ -266,6 +297,13 @@ async function runAiAnalysis(days, force = false) {
     return;
   }
   if (!state.identity) return;
+  const n = Math.trunc(Number(days));
+  if (!Number.isFinite(n) || n < 1 || n > 365) {
+    toast('推演天数写 1 到 365 之间的整数');
+    return;
+  }
+  days = n;
+  state.ai.lastDays = days;
   if (force && !confirm(`重新生成最近 ${days} 天的复盘？会重新调用模型（消耗 token）。`)) return;
   state.aiLoading = true;
   renderAI();
@@ -380,7 +418,8 @@ function renderHeader() {
     ? '有事上奏，无事退朝；今日的差事办了几桩？'
     : '朕与娘娘共治此国，六部奏疏俱在御书房候着';
   $('#dateLine').textContent = today.slice(5).replace('-', ' / ');
-  $('#weekdayLine').textContent = dayOfWeek(today);
+  const lunarLine = lunar.fullLabel(today);
+  $('#weekdayLine').textContent = lunarLine ? `${dayOfWeek(today)} · ${lunarLine}` : dayOfWeek(today);
   const rec = todayRecord();
   const s = core.summarize(rec);
   $('#todayNote').textContent = s.settled ? `已了 ${s.done}/${s.total} 桩` : '';
@@ -411,6 +450,7 @@ function pctDot(pct, attrs = '', extraClass = '') {
 function goalRow(g) {
   const pct = Number.isFinite(Number(g.progress)) ? Number(g.progress) : g.status === 'done' ? 100 : 0;
   const meta = [];
+  if (g.due) meta.push(`<span class="goal-due">${esc(dueLabel(g.due))}</span>`);
   if (g.checkedAt) meta.push(`回话于 ${whatTime(g.checkedAt)}`);
   if (g.note) meta.push(`<span class="note">附言：${esc(g.note)}</span>`);
   return `<div class="goal" data-id="${esc(g.id)}">
@@ -474,11 +514,16 @@ function renderHistory() {
     if (c.blank) return '<div class="cal-cell blank"></div>';
     const pct = c.total ? Math.round((c.done / c.total) * 100) : 0;
     const mini = c.total ? `<span class="mini"><i style="width:${pct}%"></i></span>` : '';
+    const lunarText = lunar.lunarLabel(c.date);
+    const festival = lunar.festivalOf(c.date);
+    const lunarHtml = lunarText
+      ? `<span class="lunar ${festival ? 'fest' : ''}">${esc(lunarText)}</span>`
+      : '';
     const cls = ['cal-cell', `l${c.level}`, c.isToday ? 'today' : '', c.future ? 'future' : '']
       .filter(Boolean)
       .join(' ');
     return `<button type="button" class="${cls}" data-date="${c.date}" ${c.future ? 'disabled' : ''}
-      aria-label="${c.date}">${`<span class="dnum">${c.day}</span>`}${mini}</button>`;
+      aria-label="${c.date} ${esc(lunarText)}">${`<span class="dnum">${c.day}</span>`}${mini}${lunarHtml}</button>`;
   }).join('');
 
   const monthly = sum.submitted
@@ -512,14 +557,13 @@ function renderAI() {
   const el = $('#aiCard');
   if (!el) return;
   const ai = state.ai;
-  const days = (Array.isArray(ai.days) && ai.days.length ? ai.days : [7, 14, 30, 90]).filter((d) => d <= 365);
   const usable = ai.available === true && !state.aiLoading;
   const stateText = ai.available === null
     ? '还没连上中枢'
     : ai.available
       ? `中枢在线 · ${ai.model ?? 'deepseek'}`
       : '中枢说暂时不能复盘';
-  const btns = days.map((d) => `<button type="button" class="ai-btn" data-ai-days="${d}" ${usable ? '' : 'disabled'}>${d} 天</button>`).join('');
+  const dayValue = Math.max(1, Math.min(365, Math.trunc(Number(ai.lastDays) || 30)));
 
   const history = ai.history ?? [];
   const histHtml = history.length
@@ -530,15 +574,21 @@ function renderAI() {
           <span class="ai-hist-chars">${h.chars ?? ''} 字</span>
         </button>`).join('')}
       </div>`
-    : `<div class="ai-note">${ai.available === false ? '' : '尚无旧推演。点上面天数，让钦天监算一卦；算过之后可随时翻看。'}</div>`;
+    : `<div class="ai-note">${ai.available === false ? '' : '尚无旧推演。填个天数，让钦天监算一卦；算过之后可随时翻看。'}</div>`;
 
   el.innerHTML = `
     <div class="ai-head">
       <span>🧭 钦天监推演</span>
       <span class="ai-tag ${usable ? 'on' : ''}">${esc(state.aiLoading ? '正在掐算…' : stateText)}</span>
     </div>
-    <div class="ai-note"><b>此为何用：</b>把最近这些天的差事、进度与未了的账，交给钦天监（DeepSeek 模型）算一卦——哪几桩拖住了、哪几天最勤、往后先办哪件。点下面的天数即可推演。</div>
-    <div class="ai-days">${btns}</div>
+    <div class="ai-note"><b>此为何用：</b>把最近这些天的差事、进度与未了的账，交给钦天监（DeepSeek 模型）算一卦——哪几桩拖住了、哪几天最勤、往后先办哪件。写个天数即可推演，1 到 365 天都成。</div>
+    <div class="ai-days">
+      <label class="ai-days-label">推演
+        <input id="aiDaysInput" type="number" inputmode="numeric" min="1" max="365" step="1" value="${dayValue}" ${usable ? '' : 'disabled'}>
+        天
+      </label>
+      <button type="button" class="ai-btn" id="aiRun" ${usable ? '' : 'disabled'}>掐算</button>
+    </div>
     <div class="ai-note">${ai.available === false
       ? esc(ai.reason || '中枢还没配置模型 key，看板页有说明')
       : '同一段天下事只算一次：没变化就翻旧卦，不费分文；想看新的再点「重新推演」。推演要连中枢，离线可翻旧卦存档。'}</div>
@@ -676,6 +726,7 @@ async function applyCourt(mutator, { rerender = true } = {}) {
   const next = mutator(state.court.state);
   state.court.state = court.normalizeCourtState(next);
   await store.setMeta('courtState', state.court.state);
+  void replan();
   markDirty();
   if (rerender) render();
   scheduleCourtSync();
@@ -1133,7 +1184,7 @@ async function openDeptSheet(deptId) {
         ${pctDot(t.progress, `data-progress-open="task" data-task="${esc(t.id)}" data-dept="${esc(deptId)}"`)}
         <div class="dept-task-main">
           <div class="annual-text ${t.progress >= 100 ? 'done' : ''}">${esc(t.text)}</div>
-          <div class="annual-sub"><span>${ANNUAL_LABEL[t.status] ?? t.status}</span><span>${String(t.createdAt ?? '').slice(5, 10).replace('-', '/')} 下的旨</span></div>
+          <div class="annual-sub"><span>${ANNUAL_LABEL[t.status] ?? t.status}</span>${t.due ? `<span class="task-due">${esc(dueLabel(t.due))}</span>` : ''}<span>${String(t.createdAt ?? '').slice(5, 10).replace('-', '/')} 下的旨</span></div>
         </div>
         ${canEdit ? `<button class="annual-del" data-task-del="${esc(t.id)}" aria-label="撤旨">×</button>` : ''}
       </div>`).join('')
@@ -1148,7 +1199,8 @@ async function openDeptSheet(deptId) {
       <div class="addbar" style="margin-top:12px">
         <input id="deptTaskInput" type="text" maxlength="80" placeholder="给${esc(dept.name)}下旨…" enterkeyhint="done">
         <button class="btn" id="deptTaskAdd" data-dept="${deptId}">下旨</button>
-      </div>` : '<div class="ai-note">下旨的事由陛下与皇后定夺；家人可以先看着。</div>'}
+      </div>
+      <label class="due-line">到点提醒（可不填）<input id="deptTaskDue" type="datetime-local"></label>` : '<div class="ai-note">下旨的事由陛下与皇后定夺；家人可以先看着。</div>'}
     <div class="sheet-actions">
       <button class="btn" id="deptSummon" data-dept="${deptId}" ${state.hub.url ? '' : 'disabled'}>让该部上奏</button>
       <button class="btn ghost" id="deptClose">退下</button>
@@ -1164,7 +1216,11 @@ async function createDeptTask(deptId) {
   const text = input?.value?.trim();
   if (!text) return;
   try {
-    await applyCourt((s) => court.addTaskLocal(s, deptId, { text, by: state.identity.memberId }));
+    await applyCourt((s) => court.addTaskLocal(s, deptId, {
+      text,
+      by: state.identity.memberId,
+      due: dueFromInput($('#deptTaskDue')?.value),
+    }));
     await openDeptSheet(deptId);
     toast('已给该部下旨（先记本机，稍后传中枢）', 2800);
   } catch (err) {
@@ -1280,6 +1336,9 @@ function dispatchSimpleRow(item, i) {
       <b>${esc(label)}</b>
     </label>
     <input type="text" maxlength="80" value="${esc(item.text)}" data-dispatch-task="${i}" aria-label="${esc(label)}的差事">
+    <label class="dispatch-due">⏰ 到点
+      <input type="datetime-local" value="${esc(dueToInput(item.due))}" data-dispatch-due="${i}" aria-label="${esc(label)}的到点提醒">
+    </label>
   </div>`;
 }
 
@@ -1300,7 +1359,7 @@ function renderDispatchResult(root, items, meta) {
   const from = meta.source === 'model' ? '司礼监拟的' : '按老规矩拆的';
   el.innerHTML = `
     <div class="dispatch-list">${groups}</div>
-    <div class="ai-note">${meta.warning ? esc(meta.warning) : `${from}，共 ${items.length} 件；改字、勾选都行，点头才下旨。`}</div>
+    <div class="ai-note">${meta.warning ? esc(meta.warning) : `${from}，共 ${items.length} 件；改字、勾选都行，点头才下旨。`}带钟点的到点会响铃。</div>
     <button class="btn block" id="dispatchConfirm">按此下发（${items.length} 件）</button>
     <button class="btn ghost block" id="dispatchRetry" style="margin-top:6px">让司礼监重拟</button>
   `;
@@ -1312,34 +1371,40 @@ async function confirmDispatch(root, items) {
   const annual = [];
   const goals = [];
   const tasks = [];
-  root.querySelectorAll('[data-dispatch-pick]').forEach((cb) => {
-    if (!cb.checked) return;
+  const picks = [...root.querySelectorAll('[data-dispatch-pick]')].filter((cb) => cb.checked);
+  for (const cb of picks) {
     const i = Number(cb.dataset.dispatchPick);
     const it = items[i];
+    if (!it) continue;
     const text = root.querySelector(`[data-dispatch-task="${i}"]`)?.value?.trim() ?? '';
-    if (!text) return;
+    const due = dueFromInput(root.querySelector(`[data-dispatch-due="${i}"]`)?.value);
+    if (due && Date.parse(due) <= Date.now()) {
+      toast('有一件的到点时刻已经过了，改一下再下发');
+      return;
+    }
+    if (!text) continue;
     if (it.kind === 'annual') {
       const raw = root.querySelector(`[data-dispatch-budget="${i}"]`)?.value?.trim() ?? '';
       annual.push({ text, period: it.period ?? 'year', budget: raw === '' ? null : Number(raw) });
     } else if (it.kind === 'goal') {
-      goals.push(text);
+      goals.push({ text, due });
     } else {
-      tasks.push({ dept: it.dept, text });
+      tasks.push({ dept: it.dept, text, due });
     }
-  });
+  }
   if (!annual.length && !goals.length && !tasks.length) {
     toast('一件都没勾');
     return;
   }
   try {
     if (goals.length) {
-      await updateToday((r) => goals.reduce((acc, text) => core.addGoal(acc, text), r));
+      await updateToday((r) => goals.reduce((acc, g) => core.addGoal(acc, g.text, new Date(), { due: g.due }), r));
     }
     if (annual.length || tasks.length) {
       await applyCourt((s) => {
         let next = s;
         for (const a of annual) next = court.addAnnualLocal(next, { ...a, by: state.identity.memberId });
-        for (const t of tasks) next = court.addTaskLocal(next, t.dept, { text: t.text, by: state.identity.memberId });
+        for (const t of tasks) next = court.addTaskLocal(next, t.dept, { text: t.text, due: t.due, by: state.identity.memberId });
         return next;
       });
     }
@@ -1583,9 +1648,12 @@ function settingsHtml() {
       <label>提醒</label>
       <div class="row">
         <button class="btn ghost" id="checkPerm">检查通知权限</button>
-        <button class="btn ghost" id="testNotify">发一条测试通知</button>
+        <button class="btn ghost" id="exactAlarm">准点闹钟设置</button>
+        <button class="btn ghost" id="testNotify">发测试通知</button>
+        <button class="btn ghost" id="replanNow">补排提醒</button>
       </div>
-      <div class="hint">07:30 只有当天还没设目标时才响；21:30 只有当天有「未打卡」时才响。${notificationsAvailable() ? '' : '（当前页面不是 App，通知不可用）'}</div>
+      <div class="notify-status" id="notifyStatus">正在查看提醒底细…</div>
+      <div class="hint">07:30 只有当天还没设目标时才响；21:30 只有当天有「未打卡」时才响；传旨里带了钟点的差事，到点也会响。App 不必开在后台——靠的是手机系统闹钟；但要在系统设置里允许「大内家事」自启动、别被省电策略清掉。</div>
     </div>
 
     <div class="field">
@@ -1601,15 +1669,37 @@ function settingsHtml() {
       <div class="row">
         <button class="btn ghost" id="copyData">复制全部数据</button>
       </div>
-      <div class="hint">数据只在这台手机与家中电脑，不劳云端。复制出来是「2026年11月18日：事项一；事项二。」一天一行。</div>
+      <div class="hint">数据只在这台手机与家中电脑，不劳云端。复制出来是「2026年11月18日：事项一；事项二。」一天一行。 · 大内家事 v1.1</div>
     </div>
   `;
+}
+
+async function refreshNotifyStatus() {
+  const el = $('#notifyStatus');
+  if (!el) return;
+  const s = await notificationStatus();
+  if (!s.available) {
+    el.textContent = `提醒不可用：${s.reason || '当前不是 App 环境'}`;
+    return;
+  }
+  const perm = { granted: '已允许', denied: '被拒了', prompt: '还没问过', prompt_with_rationale: '还没问过' }[s.permission] ?? s.permission;
+  const exact = { granted: '已允许', denied: '未允许', not_supported: '这版安卓不支持' }[s.exact] ?? s.exact;
+  const channels = s.channels.length ? s.channels.map((c) => c.name || c.id).join('、') : '还没建渠道';
+  const next = (s.pending ?? [])
+    .map((n) => ({ ...n, ms: Date.parse(n.at) }))
+    .filter((n) => Number.isFinite(n.ms))
+    .sort((a, b) => a.ms - b.ms)[0];
+  const nextText = next
+    ? `下一条 ${new Date(next.ms).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
+    : '眼下没有排上的提醒';
+  el.textContent = `权限：${perm} · 精确闹钟：${exact} · 渠道：${channels} · 待发 ${s.pending.length} 条 · ${nextText}`;
 }
 
 function openSettingsSheet() {
   openSheet(`<h3>朕的私事</h3>${settingsHtml()}<div class="sheet-actions"><button class="btn block" id="settingsClose">关上</button></div>`, (root) => {
     root.querySelector('#settingsClose').addEventListener('click', closeSheet);
     root.querySelector('#avatarChange')?.addEventListener('click', () => $('#avatarFile')?.click());
+    void refreshNotifyStatus();
   });
 }
 
@@ -1681,7 +1771,7 @@ function openOnboarding() {
         closeSheet();
         await ensureChannel();
         await ensurePermission();
-        void applyPlan(state.records);
+        void applyPlan(state.records, new Date(), state.court.state);
         render();
         void runSync(false);
       } catch (err) {
@@ -1841,6 +1931,11 @@ function bindEvents() {
       void runAiAnalysis(Number(aiBtn.dataset.aiDays));
       return;
     }
+    const aiRun = e.target.closest('#aiRun');
+    if (aiRun && !aiRun.disabled) {
+      void runAiAnalysis(Number($('#aiDaysInput')?.value));
+      return;
+    }
 
     const aiHist = e.target.closest('[data-ai-id]');
     if (aiHist) {
@@ -1972,7 +2067,22 @@ function bindEvents() {
         void runSync(true);
         return;
       case 'checkPerm':
-        ensurePermission().then((r) => toast(r.granted ? '通知权限没问题' : `没拿到通知权限：${r.reason ?? '被拒绝'}`));
+        ensurePermission().then(async (r) => {
+          toast(r.granted ? '通知权限没问题' : `没拿到通知权限：${r.reason ?? '被拒绝'}`);
+          await refreshNotifyStatus();
+        });
+        return;
+      case 'exactAlarm':
+        openExactAlarmSetting().then(async (r) => {
+          toast(r.ok ? '请把「允许设定精确闹钟」打开' : `打不开设置：${r.reason ?? '这版安卓不支持'}`);
+          await refreshNotifyStatus();
+        });
+        return;
+      case 'replanNow':
+        replan().then(async (r) => {
+          toast(r?.applied ? `已排上 ${r.applied} 条提醒` : `没排上：${r?.reason ?? '环境不支持'}`);
+          await refreshNotifyStatus();
+        });
         return;
       case 'testNotify':
         ensurePermission().then(async (r) => {
@@ -2045,7 +2155,7 @@ function bindEvents() {
   window.addEventListener('offline', () => { state.online = false; renderSyncPill(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      void applyPlan(state.records);
+      void applyPlan(state.records, new Date(), state.court.state);
       void runSync(false);
     }
   });
@@ -2069,13 +2179,13 @@ async function boot() {
   if (state.calMonth > latest) state.calMonth = latest;
   render();
   if (state.identity) {
-    void applyPlan(state.records);
+    await ensurePermission().catch(() => {});
+    void applyPlan(state.records, new Date(), state.court.state);
     void loadAiInfo().then(() => {
       if (state.page === 'daily') renderAI();
     });
     void ensureCourt();
     void runSync(false);
-    ensurePermission().catch(() => {});
   }
 }
 
