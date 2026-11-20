@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseLedgerLine, parseLedgerText, summarizeLedger, categorize } from '../court/ledger.mjs';
+import { emptyCourtState, mergeLedgerSections, normalizeCourtState } from '../shared/court-state.mjs';
+import { writeCourtState, readCourtState } from '../court/state.mjs';
 import { COURT_DEPTS, systemPrompt, userPrompt, extractTitle } from '../court/personas.mjs';
 import {
   ensureCourtDirs, setRole, roleOf, listMemorials, saveMemorial, disposeMemorial, readMemory, listLedger,
@@ -60,6 +62,18 @@ test('一行记多笔：包子4 deepseek50 午饭18', () => {
   assert.equal(spaced.ok, true);
   assert.equal(spaced.entries.length, 2);
   assert.equal(spaced.entries[0].amount, 35);
+});
+
+test('语音原句：几样东西共一个价，也要并成一笔', () => {
+  const r = parseLedgerText('包子 白蛋 糯玉米9元 午饭冒菜18元');
+  assert.equal(r.ok, true);
+  assert.equal(r.entries.length, 2);
+  assert.deepEqual(r.entries.map((e) => [e.item, e.amount]), [
+    ['包子、白蛋、糯玉米', 9],
+    ['午饭冒菜', 18],
+  ]);
+  assert.equal(r.entries[0].categoryLabel, '吃喝');
+  assert.equal(r.entries[1].categoryLabel, '吃喝');
 });
 
 test('流水汇总按天数过滤并分类', () => {
@@ -177,6 +191,43 @@ test('朝会：六部依次有简报，且不走模型', () => {
   assert.deepEqual(mt.items.map((i) => i.deptId), ['libu', 'hubu', 'libu2', 'bingbu', 'xingbu', 'gongbu']);
   assert.match(mt.brief, /本日朝会/);
   assert.equal(typeof mt.pendingTotal, 'number');
+});
+
+test('账目合并：新的改动赢，旧账盖不回来，墓碑能删账', () => {
+  const mk = (id, amount, updatedAt, date = '2026-11-18') => ({
+    id, at: `${date}T12:00:00+08:00`, date, item: '午饭', amount,
+    categoryId: 'food', categoryLabel: '吃喝', updatedAt,
+  });
+  const server = normalizeCourtState({ ledger: { entries: [mk('l1', 18, '2026-11-18T12:00:00+08:00')], deleted: {} } });
+  const changed = normalizeCourtState({ ledger: { entries: [mk('l1', 20, '2026-11-18T13:00:00+08:00')], deleted: {} } });
+  assert.equal(mergeLedgerSections(changed.ledger, server.ledger).entries[0].amount, 20);
+
+  const stale = normalizeCourtState({ ledger: { entries: [mk('l1', 15, '2026-11-18T11:00:00+08:00')], deleted: {} } });
+  assert.equal(mergeLedgerSections(stale.ledger, server.ledger).entries[0].amount, 18, '旧改动不能盖回新账');
+
+  const removed = normalizeCourtState({ ledger: { entries: [], deleted: { l1: '2026-11-18T14:00:00+08:00' } } });
+  assert.equal(mergeLedgerSections(removed.ledger, server.ledger).entries.length, 0, '删掉的账不能被旧账复活');
+});
+
+test('账目落盘：改过、删掉的账都留得住', () => {
+  const dir = tmp();
+  ensureCourtDirs(dir);
+  const entry = {
+    id: 'l1', at: '2026-11-18T12:00:00+08:00', date: '2026-11-18',
+    item: '午饭', amount: 18, categoryId: 'food', categoryLabel: '吃喝',
+    updatedAt: '2026-11-18T12:00:00+08:00',
+  };
+  const state = emptyCourtState();
+  state.ledger.entries = [entry];
+  writeCourtState(dir, state);
+  assert.equal(readCourtState(dir).ledger.entries.length, 1);
+
+  state.ledger.entries = [];
+  state.ledger.deleted = { l1: '2026-11-18T14:00:00+08:00' };
+  writeCourtState(dir, state);
+  const after = readCourtState(dir);
+  assert.equal(after.ledger.entries.length, 0);
+  assert.ok(after.ledger.deleted.l1, '墓碑要写进 tombstones.json');
 });
 
 test('台账：记账写入后能被汇总读到', () => {

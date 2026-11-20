@@ -1,19 +1,19 @@
-// 由 tools/sync-assets.mjs 从 court/ledger.mjs 复制，别直接改这里
+// 由 tools/sync-assets.mjs 从 shared/ledger.mjs 复制，别直接改这里
 /**
- * 户部 · 一句话记账
+ * 户部 · 一句话记账（两端共用的纯函数）
  *
  * 输入示例：
  *   买菜 35
  *   外卖 28.5 元
  *   交电费 200
- *   给娃买书  Eighty? 不，数字必须阿拉伯
+ *   包子 白蛋 糯玉米9元 午饭冒菜18元
  *
  * 设计取舍：先用规则解析（快、免费、可单测），解析不出金额时明确报错让人重写，
- * 不偷偷调模型烧 token。
+ * 不偷偷调模型烧 token。司礼监识别口谕时也复用这里的解析与归类。
  */
 
 export const CATEGORIES = [
-  { id: 'food', label: '吃喝', words: ['菜', '买菜', '菜市场', '超市', '外卖', '早餐', '早点', '午饭', '晚饭', '宵夜', '水果', '零食', '奶茶', '咖啡', '包子', '馒头', '饺子', '水饺', '面条', '米饭', '饭', '火锅', '烧烤', '肉', '鸡蛋', '蛋', '奶', '饮料', '可乐', '米', '面', '油'] },
+  { id: 'food', label: '吃喝', words: ['菜', '买菜', '菜市场', '超市', '外卖', '早餐', '早点', '午饭', '晚饭', '宵夜', '水果', '零食', '奶茶', '咖啡', '包子', '馒头', '饺子', '水饺', '面条', '米饭', '饭', '火锅', '烧烤', '肉', '鸡蛋', '白蛋', '玉米', '糯玉米', '冒菜', '蛋', '奶', '饮料', '可乐', '米', '面', '油'] },
   { id: 'utilities', label: '水电燃气', words: ['电费', '水费', '燃气', '煤气', '物业', '宽带', '话费', '网费'] },
   { id: 'transport', label: '交通', words: ['打车', '地铁', '公交', '油费', '加油', '停车', '高铁', '车票'] },
   { id: 'home', label: '家居', words: ['家具', '家电', '收纳', '清洁', '装修', '维修', '五金', '灯', '床品'] },
@@ -39,14 +39,7 @@ export function categorize(text) {
   return CATEGORIES.find((c) => c.id === 'other');
 }
 
-/**
- * 解析一行记账文字。
- * 返回 { ok, amount, item, category, note } 或 { ok:false, error }
- */
-/**
- * 一行里可以写好几笔：「包子4 deepseek50 午饭18」
- * 返回 { ok, entries:[{amount,item,categoryId,categoryLabel,raw}], unparsed }
- */
+/** 把「包子 白蛋 糯玉米9元」里的前两项并进后一笔，别丢掉没带金额的品名 */
 export function parseLedgerText(input) {
   const text = String(input ?? '').trim();
   if (!text) return { ok: false, error: '写点什么吧，比如「包子 4，午饭 18」' };
@@ -60,7 +53,7 @@ export function parseLedgerText(input) {
 
   const entries = [];
   const unparsed = [];
-  let pendingItem = null;
+  const pending = [];
 
   const push = (item, numStr, raw) => {
     const amount = Number(numStr);
@@ -79,12 +72,15 @@ export function parseLedgerText(input) {
     });
   };
 
+  const rest = () => [...new Set(pending.map((s) => s.replace(/[:：]$/, '').trim()).filter(Boolean))];
+
   for (const tok of chunks) {
     const onlyNum = tok.match(/^(\d+(?:\.\d{1,2})?)\s*(?:元|块|块钱|rmb|¥)?$/i);
     if (onlyNum) {
-      if (pendingItem) {
-        push(pendingItem, onlyNum[1], `${pendingItem} ${onlyNum[1]}`);
-        pendingItem = null;
+      const items = rest();
+      if (items.length) {
+        push(items.join('、'), onlyNum[1], `${items.join(' ')} ${onlyNum[1]}`);
+        pending.length = 0;
       } else {
         unparsed.push(tok);
       }
@@ -92,13 +88,14 @@ export function parseLedgerText(input) {
     }
     const both = tok.match(/^(.+?)[\s:：]*(\d+(?:\.\d{1,2})?)\s*(?:元|块|块钱|rmb|¥)?$/i);
     if (both) {
-      push(both[1], both[2], tok);
-      pendingItem = null;
+      const items = [...rest(), both[1].replace(/[:：]$/, '').trim()].filter(Boolean);
+      push(items.join('、'), both[2], `${items.join(' ')} ${both[2]}`);
+      pending.length = 0;
       continue;
     }
-    pendingItem = tok; // 等下个数来配对
+    pending.push(tok); // 等下个数来配对
   }
-  if (pendingItem) unparsed.push(pendingItem);
+  unparsed.push(...rest());
 
   if (!entries.length) {
     return { ok: false, error: '一笔都没认出来，照「包子 4，午饭 18」这样写', unparsed };

@@ -258,6 +258,16 @@ export function listLedger(dataDir) {
   return readJsonl(ledgerFile(dataDir));
 }
 
+/** 整份重写：账目可改可删，追加式 jsonl 已不够用（最多 2000 笔） */
+export function saveLedger(dataDir, entries) {
+  const f = ledgerFile(dataDir);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const body = (entries ?? []).map((e) => JSON.stringify(e)).join('\n');
+  const tmp = `${f}.tmp`;
+  fs.writeFileSync(tmp, body ? `${body}\n` : '', 'utf8');
+  fs.renameSync(tmp, f);
+}
+
 export const budgetFile = (dataDir) => path.join(courtDir(dataDir), 'budget.json');
 
 export function readBudget(dataDir) {

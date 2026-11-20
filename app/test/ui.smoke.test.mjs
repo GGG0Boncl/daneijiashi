@@ -162,7 +162,7 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     await flush(240);
     assert.match($('#dispatchResult').textContent, /今日差事/);
     assert.equal(document.querySelectorAll('[data-dispatch-pick]').length, 2);
-    assert.equal(document.querySelectorAll('[data-dispatch-due]').length, 2, '每条今日差事都能定到点');
+    assert.equal(document.querySelectorAll('[data-dispatch-due]').length, 0, '到点由司礼监判断，不再摆输入框');
     $('#dispatchConfirm').click();
     await flush(260);
     assert.equal($('#sheetMask'), null);
@@ -253,45 +253,85 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     assert.match(document.querySelector('.dept-row[data-dept="libu"] .dept-sum').textContent, /差事 1 道/);
   });
 
-  await t.test('各部下旨不再带举例，只留一句职责', async () => {
+  await t.test('各部下旨：只留一句职责，不再摆输入框', async () => {
     document.querySelector('.dept-row[data-dept="bingbu"]').click();
     await flush(70);
-    assert.match($('#deptTaskInput').placeholder, /给兵部下旨/);
-    assert.ok(!$('#deptTaskInput').placeholder.includes('湿地公园'), '举例已删');
-    assert.ok($('#deptTaskDue'), '部里下旨也能定到点');
     assert.match($('#sheetMask').textContent, /职责：管出行安全/);
+    assert.equal($('#deptTaskInput'), null, '部里不再手填差事');
+    assert.equal($('#deptTaskDue'), null, '部里不再定到点');
+    assert.ok($('#deptToDispatch'), '要下旨只能去司礼监');
     $('#deptClose').click();
     await flush(40);
   });
 
-  await t.test('户部：下旨、记多笔账，账房就收在这一片里', async () => {
-    document.querySelector('.dept-row[data-dept="hubu"]').click();
+  await t.test('户部账目：按日分组，能改能删', async () => {
+    document.querySelector('#dispatchCard [data-open-dispatch]').click();
     await flush(70);
-    assert.match($('#sheetMask').textContent, /职责：管钱粮账目/);
-    assert.ok($('#courtLedger'), '户部里有记账入口');
-    $('#deptTaskInput').value = '把本月账目理清';
-    $('#deptTaskAdd').click();
-    await flush(180);
-    assert.match($('#sheetMask').textContent, /把本月账目理清/);
-    assert.equal(document.querySelector('.dept-task .pct-dot').textContent.trim(), '0%');
+    $('#dispatchText').value = '包子 白蛋 糯玉米9元，午饭冒菜18元';
+    $('#dispatchGo').click();
+    await flush(260);
+    assert.match($('#dispatchResult').textContent, /户部账目/, '带金额的话要归账，不是今日差事');
+    const ledgerRows = [...document.querySelectorAll('.dispatch-ledger')];
+    assert.equal(ledgerRows.length, 2, '两笔账都要认出来');
+    assert.equal(ledgerRows[0].querySelector('[data-dispatch-item]').value, '包子、白蛋、糯玉米');
+    assert.equal(ledgerRows[0].querySelector('[data-dispatch-amount]').value, '9');
+    assert.equal(ledgerRows[1].querySelector('[data-dispatch-item]').value, '午饭冒菜');
+    assert.equal(ledgerRows[1].querySelector('[data-dispatch-amount]').value, '18');
+    $('#dispatchConfirm').click();
+    await flush(300);
+    assert.equal($('#sheetMask'), null);
 
-    $('#courtLedger').value = '包子4 deepseek50 午饭18';
-    $('#courtLedgerBtn').click();
-    await flush(220);
-    const text = $('#sheetMask').textContent;
-    assert.match(text, /近卅日 3 笔/);
-    assert.match(text, /合计 ¥72/);
-    assert.match(text, /吃喝/);
-    assert.match(text, /数码订阅/);
+    document.querySelector('.dept-row[data-dept="hubu"]').click();
+    await flush(80);
+    assert.ok(document.querySelector('.ledger-range'), '户部里有按日账目');
+    assert.equal(document.querySelector('#courtLedger'), null, '户部不再手填账');
+    assert.match($('#sheetMask').textContent, /近七日/, '默认看近七日');
+    assert.match($('#sheetMask').textContent, /午饭冒菜/);
+    assert.match($('#sheetMask').textContent, /¥18/);
+    assert.equal(document.querySelectorAll('[data-ledger-edit]').length, 2);
+
+    const baoziRow = [...document.querySelectorAll('.ledger-row')].find((row) => row.textContent.includes('包子'));
+    baoziRow.querySelector('[data-ledger-edit]').click();
+    await flush(70);
+    assert.ok($('#ledgerItem'));
+    assert.ok($('#ledgerDate'));
+    $('#ledgerAmount').value = '20';
+    $('#ledgerSave').click();
+    await flush(260);
+    assert.match($('#sheetMask').textContent, /¥20/, '改过的金额要看得到');
+
+    window.confirm = () => true;
+    const changedRow = [...document.querySelectorAll('.ledger-row')].find((row) => row.textContent.includes('包子'));
+    changedRow.querySelector('[data-ledger-edit]').click();
+    await flush(70);
+    $('#ledgerDelete').click();
+    await flush(260);
+    assert.equal(document.querySelectorAll('[data-ledger-edit]').length, 1, '删掉一笔只剩一笔');
+    assert.match($('#sheetMask').textContent, /午饭冒菜/);
+    $('#deptClose').click();
+    await flush(40);
   });
 
   await t.test('差事进度也走圆圈弹层，60% 记上', async () => {
+    document.querySelector('#dispatchCard [data-open-dispatch]').click();
+    await flush(70);
+    $('#dispatchText').value = '让兵部明天检查车况';
+    $('#dispatchGo').click();
+    await flush(260);
+    assert.match($('#dispatchResult').textContent, /兵部/);
+    $('#dispatchConfirm').click();
+    await flush(300);
+    document.querySelector('.dept-row[data-dept="bingbu"]').click();
+    await flush(80);
+    assert.ok(document.querySelector('.dept-task .pct-dot'), '司礼监下的差事落到兵部');
     document.querySelector('.dept-task .pct-dot').click();
     await flush(60);
     $('#pctRange').value = '60';
     $('#pctSave').click();
     await flush(220);
     assert.equal(document.querySelector('.dept-task .pct-dot').textContent.trim(), '60%');
+    $('#deptClose').click();
+    await flush(40);
   });
 
   await t.test('头像：换过一次后，再点头像仍能唤出选图', async () => {
@@ -380,13 +420,14 @@ test('App 两页：朝廷与起居（离线可用）', async (t) => {
     assert.equal(saved.annual.items[0].adjustments, 1, '改措辞与预算记一次调整');
 
     const hubuItems = saved.tasks.hubu.items;
-    assert.equal(hubuItems.length, 1);
-    assert.equal(hubuItems[0].progress, 60);
+    assert.equal(hubuItems.length, 0, '户部不再手填差事');
+    assert.equal(saved.tasks.bingbu.items.length, 1, '兵部收到了检查车况的差事');
+    assert.equal(saved.tasks.bingbu.items[0].progress, 60);
     assert.equal(saved.tasks.libu2.items.length, 1, '礼部收到了出游的差事');
     assert.equal(saved.tasks.libu.items.length, 1, '吏部收到了谁去谁留的差事');
-    assert.equal(saved.ledger.entries.length, 3);
-    const items = saved.ledger.entries.map((e) => e.item).sort();
-    assert.deepEqual(items, ['deepseek', '包子', '午饭']);
+    assert.equal(saved.ledger.entries.length, 1, '两笔账删掉一笔，只剩一笔');
+    assert.equal(saved.ledger.entries[0].item, '午饭冒菜');
+    assert.equal(saved.ledger.entries[0].amount, 18);
   });
 
   dom.window.close();

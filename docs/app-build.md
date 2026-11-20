@@ -14,8 +14,8 @@
 `due` 是可选的北京时间到点时刻（`YYYY-MM-DDTHH:mm+08:00`），用于本地闹钟；六部差事同样带 `due`。
 合并规则只有一份：`hub/merge.mjs`，用 `node tools/sync-assets.mjs` 复制成 `app/www/merge.js`（**别直接改 www 里那份**）。
 
-App 现在叫「大内家事」，分两页：**朝廷**（内阁 / 御书房 / 奏疏）与**起居**（今日差事 / 行事历 / 钦天监推演），
-底栏最右是「朕的私事」。图标取自 `assets/brand/app-icon.png`，经 `tools/app-identity.mjs` 体检后打进各密度 mipmap。
+App 现在叫「大内家事」，分两页：**朝廷**（内阁 / 司礼监 / 御书房 / 奏疏）与**起居**（今日差事 / 行事历 / 钦天监推演），
+底栏最右是「朕的私事」。所有新建差事与账目只从司礼监进；御书房只记进度、撤旨、催上奏。图标取自 `assets/brand/app-icon.png`，经 `tools/app-identity.mjs` 体检后打进各密度 mipmap。
 
 ## 2. 目录
 
@@ -24,6 +24,8 @@ family-checkin/
   checkin.mjs                数据层 CLI（可被 import，main 有守卫）
   shared/
     id.mjs                   成员ID规则唯一真源（emoji 合法；三端共用）
+    ledger.mjs               记账解析/归类/汇总唯一真源（App 与中枢共用）
+    court-state.mjs          国事合并规则（含账目 updatedAt/墓碑）
   hub/
     hub.mjs                  HTTP + UDP 发现/广播 + 看板
     merge.mjs                合并规则（唯一真源）
@@ -43,8 +45,8 @@ family-checkin/
       member-id.js           由 shared/id.mjs 复制
       court-state.js         国事合并规则（由 shared/court-state.mjs 复制）
       dispatch-rules.js      司礼监传旨规矩（由 shared/dispatch-rules.mjs 复制）
-      ledger.js              记账解析（由 court/ledger.mjs 复制）
-      depts.js               七部名号/职能/例句（由 court/personas.mjs 生成）
+      ledger.js              记账解析（由 shared/ledger.mjs 复制）
+      depts.js               七部名号/职能（由 court/personas.mjs 生成）
       icon.png               网页图标（由 assets/brand 缩出）
     test/                    core 单测 + jsdom 界面冒烟
     android/                 Capacitor 原生工程（含 LanDiscoveryPlugin）
@@ -58,7 +60,7 @@ family-checkin/
     seed-demo.mjs            造演示数据（默认写临时目录）
     analyze.mjs              单人复盘素材包
     sdk-setup/               换电脑重装 SDK 时才用（install-sdk*.cmd/.ps1）
-  dist/大内家事-debug.apk      可直接发手机安装（应用名：大内家事）
+  dist/大内家事-1.2-debug.apk  可直接发手机安装（应用名：大内家事）
   docs/
 ```
 
@@ -88,16 +90,16 @@ tools\build-apk.cmd
 REM 产物
 app\android\app\build\outputs\apk\debug\app-debug.apk
 REM 发布副本
-dist\大内家事-1.1-debug.apk
+dist\大内家事-1.2-debug.apk
 ```
 
-当前版本：`versionCode 2` / `versionName 1.1`（`app/android/app/build.gradle`）。
+当前版本：`versionCode 3` / `versionName 1.2`（`app/android/app/build.gradle`）。
 
 测试（都在本机跑，不需要手机）：
 
 ```bat
 node app\test\core.test.mjs           REM 状态机 + 提醒排期（含到点差事）+ 日历 + 保留期 + 文本导出（17 例）
-node app\test\ui.smoke.test.mjs       REM jsdom 界面：两页 / 点圈进度 / 内阁 / 六部行 / 传旨 / 到点输入（26 例）
+node app\test\ui.smoke.test.mjs       REM jsdom 界面：两页 / 点圈进度 / 内阁 / 六部行 / 司礼监四类 / 户部按日分组改删（26 例）
 node app\test\lunar.test.mjs          REM 农历/节日/闰月/日历小字（7 例）
 node app\test\dashboard.dom.test.mjs  REM jsdom + 真中枢：看板点卡片切人、点天数出复盘（8 例）
 node app\test\court-local.test.mjs    REM 国事本机逻辑：合并 / 墓碑 / 限调 3 次 / 多笔账（6 例）
@@ -108,13 +110,13 @@ node hub\test\court-e2e.test.mjs      REM 大内家事：权限/缓存/批阅/�
 node test\analyze.test.mjs            REM 复盘取数链路（6 例）
 node test\id.test.mjs                 REM 成员ID规则 + 副本一致性（6 例）
 node test\format.test.mjs             REM 手机/电脑导出格式一致（2 例）
-node test\court.test.mjs              REM 账本解析 + 批阅状态机 + 人格 + 缓存（10 例）
+node test\court.test.mjs              REM 账本解析（多品名合并）/ 批阅状态机 / 人格 / 缓存 / 账目墓碑（13 例）
 node test\gym.test.mjs                REM 训练场评分（5 例）
 node test\pricing.test.mjs            REM 中枢账房：峰谷价 / 缓存 0 元 / 汇总金额（6 例）
-node test\dispatch.test.mjs           REM 司礼监传旨：三类事 + 到点识别 + 模型 JSON 过筛（9 例）
+node test\dispatch.test.mjs           REM 司礼监传旨：四类事 + 语音账目 + 到点识别 + 模型 JSON 过筛（11 例）
 ```
 
-共 175 例。
+共 180 例。
 
 > 注意：`node --test` 会为每个文件 spawn 子进程，本机沙箱下会报 `spawn EPERM`，
 > 所以直接 `node <文件>`（node:test 在进程内跑）。
@@ -233,9 +235,9 @@ node test\dispatch.test.mjs           REM 司礼监传旨：三类事 + 到点�
 | `GET/POST /api/avatar` | 头像：dataURL 存取（≤400KB，png/jpeg/webp） |
 | `GET /api/annual` | 内阁（年度计划）列表，含金额预算 |
 | `POST /api/annual` `/update` `/delete` | 增 / 改 / 删；只有帝后能改；改措辞 / 周期 / 预算才算一次调整，每桩每年 3 次 |
-| `POST /api/court/dispatch` | 司礼监传旨：`{text}` → 拆成三类（annual 内阁带预算 / goal 今日差事 / task 六部差事），只出清单不落任务；同一段话有指纹缓存；断网/无模型时按 `shared/dispatch-rules.mjs` 关键词规矩拆 |
+| `POST /api/court/dispatch` | 司礼监传旨：`{text}` → 拆成四类（annual 内阁带预算 / goal 今日差事 / task 六部差事 / ledger 户部账目），只出清单不落任务；同一段话有指纹缓存；断网/无模型时按 `shared/dispatch-rules.mjs` 关键词规矩拆 |
 | `GET /api/court/state?memberId=` | 国事全量（内阁 / 七部差事 / 户部流水 / 删除墓碑）；App 开机先把本机那份显示出来 |
-| `POST /api/court/state` | 把手机记的整份国事推上来：按 `updatedAt` 合并、墓碑挡旧稿、流水按 id 去重；家人推大事返回 `rejected` 并退回中枢那份 |
+| `POST /api/court/state` | 把手机记的整份国事推上来：内阁/差事/账目都按 `updatedAt` 合并，墓碑挡旧稿；家人推大事返回 `rejected` 并退回中枢那份 |
 | `GET/POST/PATCH /api/court/*` | 七部召见、批阅、回奏、朝会、一句话记账、各部台账 |
 | `GET /api/court/tasks?dept=` · `POST /api/court/tasks` | 该部御赐差事（帝后下旨） |
 | `POST /api/court/task/update` · `/task/delete` | 改进度 / 撤旨 |
@@ -246,6 +248,10 @@ node test\dispatch.test.mjs           REM 司礼监传旨：三类事 + 到点�
 >
 > 离线优先：App 的国事存在本机 IndexedDB（`courtState`），中枢只是另一份；所有改动先记本机，
 > 连上中枢再整份 POST `/api/court/state` 合并（`shared/court-state.mjs` 两端共用一套合并规则）。
+>
+> 户部账目：每笔带 `id / at / date / item / amount / categoryId / by / updatedAt`；改一笔会刷新 `updatedAt`，
+> 删一笔写进 `ledger.deleted` 墓碑；中枢落盘 `data/court/ledger/entries.jsonl` 是整份重写（先写 tmp 再 rename），
+> 不再只追加。这样改错账、删错账都能同步，旧稿也不会把删掉的账复活。
 > 七部名号与职能由 `tools/sync-assets.mjs` 从 `court/personas.mjs` 生成到 `app/www/depts.js`，断网也说得清每部管什么。
 >
 > 账房金额：`court/pricing.mjs` 按 DeepSeek 价目折算（默认输入命中 ¥0.043/百万、未命中 ¥2.16/百万、输出 ¥8.64/百万，
@@ -284,7 +290,7 @@ court/
   context.mjs    各部数据摘要（只给该领域的数据，做到"记忆隔离"）
   store.mjs      奏疏/批示/圣旨懿旨/记忆/台账/预算 + 批阅状态机
   agents.mjs     summon（指纹缓存）/ dispose / reply / meeting
-  ledger.mjs     一句话记账解析与汇总
+  ledger.mjs     兼容 re-export（真源在 shared/ledger.mjs）
   gym.mjs        训练场评分（5 条标准 + 领域词）
 tools/court-train.mjs   教练闭环：跑用例 → 打分 → 记 history.json
 ```

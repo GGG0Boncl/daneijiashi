@@ -59,7 +59,7 @@ export function validId(id) {
   return true;
 }
 
-export const emptyCourtState = () => ({ annual: { items: [], deleted: {} }, tasks: {}, ledger: { entries: [] } });
+export const emptyCourtState = () => ({ annual: { items: [], deleted: {} }, tasks: {}, ledger: { entries: [], deleted: {} } });
 
 function cleanDeleted(raw) {
   const out = {};
@@ -134,6 +134,7 @@ export function normalizeLedgerEntry(raw) {
   const item = cleanText(raw?.item, 40);
   if (!id || !item || !Number.isFinite(amount) || amount <= 0) return null;
   const at = Number.isFinite(asTime(raw?.at)) && asTime(raw?.at) > 0 ? new Date(asTime(raw.at)).toISOString() : nowIso();
+  const updatedAt = Number.isFinite(asTime(raw?.updatedAt)) && asTime(raw.updatedAt) > 0 ? new Date(asTime(raw.updatedAt)).toISOString() : at;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.date ?? '')) ? raw.date : at.slice(0, 10);
   return {
     id,
@@ -145,6 +146,7 @@ export function normalizeLedgerEntry(raw) {
     categoryId: str(raw?.categoryId, 20) || 'other',
     categoryLabel: str(raw?.categoryLabel, 12) || '其他',
     raw: str(raw?.raw, 120),
+    updatedAt,
   };
 }
 
@@ -175,6 +177,7 @@ export function normalizeCourtState(raw) {
     .filter(Boolean)
     .sort((a, b) => asTime(a.at) - asTime(b.at))
     .slice(-LEDGER_MAX);
+  out.ledger.deleted = cleanDeleted(ledger.deleted);
   return out;
 }
 
@@ -229,14 +232,19 @@ export function mergeTaskSections(dept, localSection, remoteSection) {
 }
 
 export function mergeLedgerSections(localSection, remoteSection) {
+  const deleted = mergeDeleted(localSection?.deleted, remoteSection?.deleted);
   const map = new Map();
   for (const e of [...(remoteSection?.entries ?? []), ...(localSection?.entries ?? [])]) {
     const prev = map.get(e.id);
-    // 流水只增不改：先到的算数（同 id 视为同一笔）
-    if (!prev) map.set(e.id, e);
+    // 账目可改：按 updatedAt 取新；同一时刻以远端为准，旧稿不会盖回新账
+    if (!prev || asTime(e.updatedAt) > asTime(prev.updatedAt)) map.set(e.id, e);
+  }
+  for (const [id, entry] of [...map.entries()]) {
+    const at = deleted[id];
+    if (at && asTime(at) >= asTime(entry.updatedAt)) map.delete(id);
   }
   const entries = [...map.values()].sort((a, b) => asTime(a.at) - asTime(b.at)).slice(-LEDGER_MAX);
-  return { entries };
+  return { entries, deleted };
 }
 
 export function mergeCourtState(localRaw, remoteRaw) {

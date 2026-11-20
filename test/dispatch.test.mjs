@@ -141,6 +141,53 @@ test('传旨带钟点：今天/明早/周六都能算出北京时间，已过点
   assert.equal(routed.items.find((i) => i.kind === 'task').due, null, '另一句没说钟点，不硬塞');
 });
 
+test('司礼监认账：带元/块/¥的归户部，别塞进今日差事', () => {
+  const now = new Date('2026-11-20T12:00:00+08:00');
+  const r = routeByRules('包子 白蛋 糯玉米9元，午饭冒菜18元', now);
+  assert.equal(r.items.length, 2);
+  assert.ok(r.items.every((i) => i.kind === 'ledger'));
+  assert.deepEqual(r.items.map((i) => [i.item, i.amount]), [
+    ['包子、白蛋、糯玉米', 9],
+    ['午饭冒菜', 18],
+  ]);
+  assert.equal(r.items[0].date, null, '没说日期，落账时按今天');
+
+  const dated = routeByRules('昨天买菜35块', now);
+  assert.equal(dated.items[0].kind, 'ledger');
+  assert.equal(dated.items[0].date, '2026-11-19');
+
+  assert.equal(routeByRules('今天要买包子4元', now).items[0].kind, 'goal', '计划要买但还没付，不算账');
+
+  const model = sanitizeDispatchItems({
+    items: [
+      { kind: 'ledger', item: '午饭冒菜', amount: '18', date: '2026-11-20' },
+      { kind: 'ledger', item: '无金额的账' },
+      { kind: 'ledger', item: '午饭冒菜', amount: 18, date: '2026-11-20' },
+    ],
+  }, { now });
+  assert.equal(model.filter((i) => i.kind === 'ledger').length, 1, '没金额、重复的账不收');
+  assert.equal(model.find((i) => i.kind === 'ledger').amount, 18);
+});
+
+test('点名哪部就落哪部：带「明天」也不抢成今日差事', () => {
+  const now = new Date('2026-11-20T12:00:00+08:00');
+  const a = routeByRules('让兵部明天检查车况', now);
+  assert.equal(a.items.length, 1);
+  assert.equal(a.items[0].kind, 'task');
+  assert.equal(a.items[0].dept, 'bingbu');
+  assert.equal(a.items[0].text, '明天检查车况');
+
+  const b = routeByRules('今天让户部把账理清', now);
+  assert.equal(b.items[0].kind, 'task');
+  assert.equal(b.items[0].dept, 'hubu');
+  assert.equal(b.items[0].due, null, '只说今天没说钟点，不硬排');
+
+  const c = routeByRules('今天下午三点兵部来接孩子', now);
+  assert.equal(c.items[0].kind, 'task');
+  assert.equal(c.items[0].dept, 'bingbu');
+  assert.equal(c.items[0].due, '2026-11-20T15:00+08:00');
+});
+
 test('每部只留一句简短职责，App 离线也用得上', async () => {
   const depts = await import(pathToFileURL(path.join(ROOT, 'app', 'www', 'depts.js')).href);
   const six = depts.COURT_DEPTS.filter((d) => d.id !== 'silijian');
@@ -162,6 +209,8 @@ test('App 副本与共享规则一致（改了一边别忘了另一边）', () =
     const src = fs.readFileSync(srcFile, 'utf8');
     const copy = fs.readFileSync(copyFile, 'utf8');
     assert.ok(copy.startsWith('// 由 tools/sync-assets.mjs'), '副本要带"别直接改"的提示');
-    assert.equal(copy.slice(copy.indexOf('export')), src.slice(src.indexOf('export')), `${path.basename(copyFile)} 与源不一致，跑 node tools/sync-assets.mjs`);
+    // App 里只能 import 真实 .js：同步时会把 ./ledger.mjs 改写成 ./ledger.js
+    const normalizedCopy = copy.replaceAll("from './ledger.js'", "from './ledger.mjs'");
+    assert.equal(normalizedCopy.slice(normalizedCopy.indexOf('export')), src.slice(src.indexOf('export')), `${path.basename(copyFile)} 与源不一致，跑 node tools/sync-assets.mjs`);
   }
 });

@@ -8,7 +8,7 @@ import {
   ANNUAL_ADJUST_LIMIT, ANNUAL_PERIOD, DEPT_IDS, annualSummary, bjIsoFromMs, clampPct,
   emptyCourtState, mergeCourtState, normalizeCourtState, taskSummary,
 } from './court-state.js';
-import { parseLedgerText, summarizeLedger } from './ledger.js';
+import { categorize, parseLedgerText, summarizeLedger } from './ledger.js';
 
 export {
   ANNUAL_ADJUST_LIMIT, ANNUAL_PERIOD, DEPT_IDS, annualSummary, clampPct,
@@ -19,6 +19,13 @@ const genId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).s
 const pad = (n) => String(n).padStart(2, '0');
 const isoOf = (d) => d.toISOString();
 const dateOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const bjDateOf = (d = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(d);
+const dateOrToday = (value, now = new Date()) => (
+  /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '')) ? String(value) : bjDateOf(now)
+);
+const atForDate = (date, now = new Date()) => (
+  date === bjDateOf(now) ? isoOf(now) : new Date(`${date}T12:00:00+08:00`).toISOString()
+);
 
 /** 该桩大事今年还剩几次调整（改措辞/周期才算调整） */
 export function adjustmentsLeft(item, now = new Date()) {
@@ -178,6 +185,69 @@ export function removeTaskLocal(state, dept, id) {
 
 /* ------------------------------ 户部流水 ------------------------------ */
 
+/** 司礼监确认后直接落一笔（账目可精确到日期、可改可删） */
+export function addLedgerEntryLocal(state, { item, amount, date = null }, { by = null, now = new Date() } = {}) {
+  const name = String(item ?? '').trim();
+  const value = Math.round(Number(amount) * 100) / 100;
+  if (!name) return { ok: false, state: normalizeCourtState(state), error: '这笔账没写名目' };
+  if (!Number.isFinite(value) || value <= 0 || value > 1_000_000) {
+    return { ok: false, state: normalizeCourtState(state), error: '金额得是 0 到 100 万之间的正数' };
+  }
+  const s = normalizeCourtState(state);
+  const day = dateOrToday(date, now);
+  const at = atForDate(day, now);
+  const category = categorize(name);
+  const entry = {
+    id: genId(),
+    at,
+    date: day,
+    by: by ?? null,
+    amount: value,
+    item: name.slice(0, 40),
+    categoryId: category.id,
+    categoryLabel: category.label,
+    raw: name,
+    updatedAt: isoOf(now),
+  };
+  s.ledger.entries = [...s.ledger.entries, entry]
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+    .slice(-2000);
+  return { ok: true, state: s, entry };
+}
+
+/** 改一笔记错的账：名目、金额、日期都能改，归类随名目重算 */
+export function updateLedgerLocal(state, id, patch = {}) {
+  const s = normalizeCourtState(state);
+  const entry = s.ledger.entries.find((e) => e.id === id);
+  if (!entry) throw new Error('找不到这笔账');
+  const nextItem = patch.item !== undefined ? String(patch.item).trim() : entry.item;
+  if (!nextItem) throw new Error('名目不能空着');
+  const nextAmount = patch.amount !== undefined ? Math.round(Number(patch.amount) * 100) / 100 : entry.amount;
+  if (!Number.isFinite(nextAmount) || nextAmount <= 0 || nextAmount > 1_000_000) throw new Error('金额得是正数');
+  const nextDate = patch.date !== undefined ? dateOrToday(patch.date) : entry.date;
+  const oldDate = entry.date;
+  if (nextItem !== entry.item) {
+    const category = categorize(nextItem);
+    entry.categoryId = category.id;
+    entry.categoryLabel = category.label;
+  }
+  entry.item = nextItem.slice(0, 40);
+  entry.amount = nextAmount;
+  entry.date = nextDate;
+  if (nextDate !== oldDate) entry.at = atForDate(nextDate);
+  entry.updatedAt = isoOf(new Date());
+  s.ledger.entries = [...s.ledger.entries].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return s;
+}
+
+export function removeLedgerLocal(state, id) {
+  const s = normalizeCourtState(state);
+  if (!s.ledger.entries.some((e) => e.id === id)) throw new Error('找不到这笔账');
+  s.ledger.entries = s.ledger.entries.filter((e) => e.id !== id);
+  s.ledger.deleted = { ...s.ledger.deleted, [id]: isoOf(new Date()) };
+  return s;
+}
+
 export function addLedgerLocal(state, text, { by = null, now = new Date() } = {}) {
   const parsed = parseLedgerText(text);
   if (!parsed.ok) {
@@ -186,7 +256,9 @@ export function addLedgerLocal(state, text, { by = null, now = new Date() } = {}
   const s = normalizeCourtState(state);
   const at = isoOf(now);
   const date = dateOf(now);
-  const entries = parsed.entries.map((e) => ({ id: genId(), at, date, by: by ?? null, ...e }));
+  const entries = parsed.entries.map((e) => ({
+    id: genId(), at, date, by: by ?? null, ...e, updatedAt: at,
+  }));
   s.ledger.entries = [...s.ledger.entries, ...entries]
     .sort((a, b) => String(a.at).localeCompare(String(b.at)))
     .slice(-2000);
@@ -195,4 +267,46 @@ export function addLedgerLocal(state, text, { by = null, now = new Date() } = {}
 
 export function summarizeLedgerLocal(state, { days = 30, now = new Date() } = {}) {
   return summarizeLedger(state?.ledger?.entries ?? [], { days, now });
+}
+
+/** 按日分组的账目，供户部按日期翻看。range: today | 7 | month | all */
+export function groupLedger(state, { range = '7', now = new Date() } = {}) {
+  const today = bjDateOf(now);
+  const since = range === 'today'
+    ? today
+    : range === 'month'
+      ? `${today.slice(0, 7)}-01`
+      : range === 'all'
+        ? ''
+        : bjDateOf(new Date(now.getTime() - 6 * 86400000));
+  const rows = (state?.ledger?.entries ?? []).filter((e) => {
+    const day = String(e.date ?? '');
+    return day && day <= today && (!since || day >= since);
+  });
+  const byDay = new Map();
+  for (const e of rows) {
+    const day = String(e.date);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(e);
+  }
+  const days = [...byDay.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, entries]) => {
+      const sorted = [...entries].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      return {
+        date,
+        count: sorted.length,
+        total: Math.round(sorted.reduce((a, e) => a + (Number(e.amount) || 0), 0) * 100) / 100,
+        entries: sorted,
+      };
+    });
+  const total = Math.round(rows.reduce((a, e) => a + (Number(e.amount) || 0), 0) * 100) / 100;
+  const todayRows = rows.filter((e) => e.date === today);
+  const monthRows = rows.filter((e) => String(e.date).startsWith(today.slice(0, 7)));
+  const sum = (list) => Math.round(list.reduce((a, e) => a + (Number(e.amount) || 0), 0) * 100) / 100;
+  return {
+    range, days, count: rows.length, total,
+    todayCount: todayRows.length, todayTotal: sum(todayRows),
+    monthCount: monthRows.length, monthTotal: sum(monthRows),
+  };
 }

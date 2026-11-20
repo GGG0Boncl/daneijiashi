@@ -389,6 +389,21 @@ test('家是小国：中枢接口全链路（假模型）', async (t) => {
     const again = await post('/api/court/state', { memberId: '大龙龙', state });
     assert.equal(again.body.state.ledger.entries.filter((e) => e.id === 'c-l1').length, 1, '同一笔只收一次');
 
+    // 改一笔记错的账：更新时刻新的赢
+    const editedAt = new Date(Date.now() + 1000).toISOString();
+    const edited = await post('/api/court/state', {
+      memberId: '大龙龙',
+      state: {
+        annual: { items: [], deleted: {} },
+        tasks: {},
+        ledger: {
+          entries: [{ ...state.ledger.entries[0], amount: 6, updatedAt: editedAt }],
+          deleted: {},
+        },
+      },
+    });
+    assert.equal(edited.body.state.ledger.entries.find((e) => e.id === 'c-l1').amount, 6);
+
     const pulled = await get('/api/court/state?memberId=大龙龙');
     assert.equal(pulled.status, 200);
     assert.ok(pulled.body.state.annual.items.some((i) => i.id === 'c-a1'));
@@ -399,17 +414,20 @@ test('家是小国：中枢接口全链路（假模型）', async (t) => {
     const deleting = {
       annual: { items: [], deleted: { 'c-a1': later } },
       tasks: { gongbu: { items: [], deleted: { 'c-t1': later } } },
-      ledger: { entries: [] },
+      ledger: { entries: [], deleted: { 'c-l1': later } },
     };
     const del = await post('/api/court/state', { memberId: '大龙龙', state: deleting });
     assert.ok(!del.body.state.annual.items.some((i) => i.id === 'c-a1'));
+    assert.ok(!del.body.state.ledger.entries.some((e) => e.id === 'c-l1'));
     const stale = await post('/api/court/state', { memberId: '大龙龙', state });
     assert.ok(!stale.body.state.annual.items.some((i) => i.id === 'c-a1'), '旧稿不该复活');
     assert.ok(!stale.body.state.tasks.gongbu.items.some((t) => t.id === 'c-t1'));
+    assert.ok(!stale.body.state.ledger.entries.some((e) => e.id === 'c-l1'), '删掉的账不该复活');
 
     const tomb = JSON.parse(fs.readFileSync(path.join(dataDir, 'court', 'tombstones.json'), 'utf8'));
     assert.ok(tomb.annual['c-a1']);
     assert.ok(tomb.tasks.gongbu['c-t1']);
+    assert.ok(tomb.ledger['c-l1']);
 
     // 家人推大事：不认，退回中枢那一份
     const family = await post('/api/court/state', {

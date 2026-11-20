@@ -5,7 +5,7 @@
  *   - hub/merge.mjs        → 打卡记录的合并规则
  *   - shared/id.mjs        → 成员 ID 规则
  *   - shared/court-state.mjs → 国事合并规则（国家大事 / 差事 / 流水）
- *   - court/ledger.mjs     → 一句话记账的解析规则
+ *   - shared/ledger.mjs    → 一句话记账的解析规则
  *   - court/personas.mjs   → 七部名号与职能（离线也要说清每部管什么）
  *
  * 用法：node tools/sync-assets.mjs
@@ -21,12 +21,13 @@ const jobs = [
   { from: path.join(ROOT, 'hub', 'merge.mjs'), to: path.join(ROOT, 'app', 'www', 'merge.js'), banner: '// 由 tools/sync-assets.mjs 从 hub/merge.mjs 复制，别直接改这里\n' },
   { from: path.join(ROOT, 'shared', 'id.mjs'), to: path.join(ROOT, 'app', 'www', 'member-id.js'), banner: '// 由 tools/sync-assets.mjs 从 shared/id.mjs 复制，别直接改这里\n' },
   { from: path.join(ROOT, 'shared', 'court-state.mjs'), to: path.join(ROOT, 'app', 'www', 'court-state.js'), banner: '// 由 tools/sync-assets.mjs 从 shared/court-state.mjs 复制，别直接改这里\n' },
-  { from: path.join(ROOT, 'shared', 'dispatch-rules.mjs'), to: path.join(ROOT, 'app', 'www', 'dispatch-rules.js'), banner: '// 由 tools/sync-assets.mjs 从 shared/dispatch-rules.mjs 复制，别直接改这里\n' },
-  { from: path.join(ROOT, 'court', 'ledger.mjs'), to: path.join(ROOT, 'app', 'www', 'ledger.js'), banner: '// 由 tools/sync-assets.mjs 从 court/ledger.mjs 复制，别直接改这里\n' },
+  { from: path.join(ROOT, 'shared', 'dispatch-rules.mjs'), to: path.join(ROOT, 'app', 'www', 'dispatch-rules.js'), banner: '// 由 tools/sync-assets.mjs 从 shared/dispatch-rules.mjs 复制，别直接改这里\n', transform: (body) => body.replaceAll("from './ledger.mjs'", "from './ledger.js'") },
+  { from: path.join(ROOT, 'shared', 'ledger.mjs'), to: path.join(ROOT, 'app', 'www', 'ledger.js'), banner: '// 由 tools/sync-assets.mjs 从 shared/ledger.mjs 复制，别直接改这里\n' },
 ];
 
 for (const job of jobs) {
-  const body = fs.readFileSync(job.from, 'utf8');
+  const raw = fs.readFileSync(job.from, 'utf8');
+  const body = job.transform ? job.transform(raw) : raw;
   fs.mkdirSync(path.dirname(job.to), { recursive: true });
   fs.writeFileSync(job.to, `${job.banner}${body}`, 'utf8');
   console.log(`✓ ${path.relative(ROOT, job.from)} → ${path.relative(ROOT, job.to)}`);

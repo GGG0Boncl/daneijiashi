@@ -11,10 +11,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { listAnnual, saveAnnualItems, ANNUAL_ADJUST_LIMIT } from './annual.mjs';
 import { listTasks, saveTaskItems } from './tasks.mjs';
-import { appendLedger, listLedger } from './store.mjs';
+import { listLedger, saveLedger } from './store.mjs';
 import {
   DEPT_IDS, emptyCourtState, normalizeCourtState, mergeAnnualSections, mergeTaskSections,
-  mergeLedgerSections, asTime,
+  mergeLedgerSections,
 } from '../shared/court-state.mjs';
 
 const tombstonesFile = (dataDir) => path.join(dataDir, 'court', 'tombstones.json');
@@ -39,6 +39,7 @@ function readTombstones(dataDir) {
   return {
     annual: raw?.annual && typeof raw.annual === 'object' ? raw.annual : {},
     tasks: raw?.tasks && typeof raw.tasks === 'object' ? raw.tasks : {},
+    ledger: raw?.ledger && typeof raw.ledger === 'object' ? raw.ledger : {},
   };
 }
 
@@ -52,7 +53,7 @@ export function readCourtState(dataDir) {
   return normalizeCourtState({
     annual: { items: listAnnual(dataDir), deleted: tombstones.annual },
     tasks,
-    ledger: { entries: listLedger(dataDir) },
+    ledger: { entries: listLedger(dataDir), deleted: tombstones.ledger ?? {} },
   });
 }
 
@@ -112,22 +113,22 @@ export function mergeForHub(serverRaw, incomingRaw, { canEdit = false } = {}) {
   return { state: { annual, tasks, ledger }, rejected };
 }
 
-/** 合并结果落盘；流水只追加不复写 */
+/** 合并结果落盘；账目整份重写，改/删才不会被旧账盖回 */
 export function writeCourtState(dataDir, state) {
   const clean = normalizeCourtState(state);
   saveAnnualItems(dataDir, clean.annual.items);
   for (const dept of DEPT_IDS) saveTaskItems(dataDir, dept, clean.tasks[dept]?.items ?? []);
 
-  const existing = listLedger(dataDir);
-  const have = new Set(existing.map((e) => e.id));
-  const extra = clean.ledger.entries
-    .filter((e) => !have.has(e.id))
-    .sort((a, b) => asTime(a.at) - asTime(b.at));
-  for (const entry of extra) appendLedger(dataDir, entry);
+  // 账目可改可删：整份重写（最多 2000 笔），否则旧账永远盖不掉
+  saveLedger(dataDir, clean.ledger.entries);
 
   const tasksTomb = {};
   for (const dept of DEPT_IDS) tasksTomb[dept] = clean.tasks[dept]?.deleted ?? {};
-  writeJson(tombstonesFile(dataDir), { annual: clean.annual.deleted, tasks: tasksTomb });
+  writeJson(tombstonesFile(dataDir), {
+    annual: clean.annual.deleted,
+    tasks: tasksTomb,
+    ledger: clean.ledger.deleted ?? {},
+  });
   return clean;
 }
 

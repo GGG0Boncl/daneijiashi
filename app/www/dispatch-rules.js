@@ -5,6 +5,7 @@
  *   annual 内阁大事（本年度计划，可带金额预算）
  *   goal   今日差事（今天/今晚/每天要做的）
  *   task   六部差事（交给某部去办的）
+ *   ledger 户部账目（已经花掉/买下/付过的钱）
  *
  * 两端共用：
  *   - 中枢 court/dispatch.mjs 先请模型拆；模型不可用或拆不出时，退回这里的关键词规矩
@@ -12,6 +13,7 @@
  *
  * 司礼监是"拆旨的人"，不给自己派差事。
  */
+import { parseLedgerText } from './ledger.js';
 
 export const DISPATCH_DEPTS = ['libu', 'hubu', 'libu2', 'bingbu', 'xingbu', 'gongbu'];
 
@@ -35,6 +37,13 @@ export const clipTask = (text, max = 80) => {
 const TODAY_RE = /今天|今日|今晚|明早|明天|每天|每日|本周内/;
 const ANNUAL_RE = /今年|本年|年度|全年|预算|攒|年终/;
 
+const NAMED_DEPTS = [
+  ['吏部', 'libu'], ['户部', 'hubu'], ['礼部', 'libu2'],
+  ['兵部', 'bingbu'], ['刑部', 'xingbu'], ['工部', 'gongbu'],
+];
+const namedDept = (clause) => NAMED_DEPTS.find(([name]) => clause.includes(name))?.[1] ?? null;
+const DEPT_PREFIX_RE = /^(?:让|叫|请|命|着|烦请|安排)?\s*(?:吏部|户部|礼部|兵部|刑部|工部)\s*[，,：:]?\s*/;
+
 /* ------------------------------ 时刻 ------------------------------ */
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -55,6 +64,52 @@ function bjParts(now) {
 /** 北京时间的 ISO 字符串：2026-11-19T15:00+08:00 */
 export function bjIso(y, mo, d, h, mi = 0) {
   return `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}+08:00`;
+}
+
+/** 北京时间的日期串：2026-11-19 */
+function bjDate(now = new Date()) {
+  const p = bjParts(now);
+  return `${p.y}-${pad2(p.mo)}-${pad2(p.d)}`;
+}
+
+/** 北京时间「今天」加减几天，返回日期串 */
+function bjShiftDate(days, now = new Date()) {
+  const p = bjParts(now);
+  return bjDate(new Date(Date.UTC(p.y, p.mo - 1, p.d) + days * 86400000));
+}
+
+/**
+ * 账目日期：认「今天/昨天/前天」「11月18日」「2026-11-18」。
+ * 账是已经花掉的钱，不收未来日期；没写日期返回 null（由 App 记今天）。
+ */
+export function normalizeLedgerDate(value, now = new Date()) {
+  const s = String(value ?? '').trim();
+  if (!s || /今天|今日|当天/.test(s)) return s ? bjDate(now) : null;
+  if (/昨天|昨日/.test(s)) return bjShiftDate(-1, now);
+  if (/前天/.test(s)) return bjShiftDate(-2, now);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (iso) {
+    const out = `${iso[1]}-${iso[2]}-${iso[3]}`;
+    const today = bjDate(now);
+    const oldest = bjShiftDate(-365, now);
+    return out <= today && out >= oldest ? out : null;
+  }
+  const md = /(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/.exec(s);
+  if (md) {
+    const mo = Number(md[1]);
+    const d = Number(md[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const p = bjParts(now);
+    let y = p.y;
+    let out = `${y}-${pad2(mo)}-${pad2(d)}`;
+    if (out > bjDate(now)) {
+      y -= 1;
+      out = `${y}-${pad2(mo)}-${pad2(d)}`;
+    }
+    const oldest = bjShiftDate(-365, now);
+    return out >= oldest ? out : null;
+  }
+  return null;
 }
 
 function parseCnInt(s) {
@@ -204,6 +259,31 @@ export function findBudget(text) {
   return null;
 }
 
+/* ------------------------------ 账目识别 ------------------------------ */
+
+const MONEY_RE = /\d+(?:\.\d{1,2})?\s*(?:元|块|块钱|rmb|¥|￥)/i;
+
+/** 一句话像不像“已经花掉的钱”。只认带钱单位的，免得把「买30个单词」当账。 */
+function looksLikeLedger(text) {
+  const t = String(text ?? '');
+  if (!MONEY_RE.test(t)) return false;
+  if (/预算|攒|目标|年度|本年|计划|打算|准备买|要买|想买/.test(t)) return false;
+  return true;
+}
+
+function ledgerItemsFromClause(clause, now) {
+  if (!looksLikeLedger(clause)) return [];
+  const parsed = parseLedgerText(clause);
+  if (!parsed.ok) return [];
+  const date = normalizeLedgerDate(clause, now);
+  return parsed.entries.map((e) => ({
+    kind: 'ledger',
+    item: e.item,
+    amount: e.amount,
+    date,
+  }));
+}
+
 /* ------------------------------ 关键词规矩 ------------------------------ */
 
 const RULES = [
@@ -258,11 +338,25 @@ export function routeByRules(text, now = new Date()) {
   const annualClauses = [];
   const goals = [];
   const tasks = [];
+  const ledger = [];
   const seenDept = new Set();
 
   for (const clause of clauses) {
+    // 带钱单位的先认账，别让「午饭18元」被当成今日差事
+    const ledgerItems = ledgerItemsFromClause(clause, now);
+    if (ledgerItems.length) {
+      ledger.push(...ledgerItems);
+      continue;
+    }
     if (ANNUAL_RE.test(clause)) {
       annualClauses.push(clause);
+      continue;
+    }
+    // 点名哪部就落哪部：即便带「明天」也还是该部的差事
+    const dept = namedDept(clause);
+    if (dept) {
+      const body = clause.replace(DEPT_PREFIX_RE, '').trim() || clause;
+      tasks.push({ kind: 'task', dept, text: clipTask(body), due: findDue(clause, now) });
       continue;
     }
     if (TODAY_RE.test(clause)) {
@@ -285,7 +379,7 @@ export function routeByRules(text, now = new Date()) {
   const items = [];
   if (hasAnnual) {
     const annualText = annualClauses.length ? annualClauses.join('；') : t;
-    items.push({ kind: 'annual', text: clipTask(annualText), budget: findBudget(t), period: 'year' });
+    items.push({ kind: 'annual', text: clipTask(annualText), budget: findBudget(annualText), period: 'year' });
   }
 
   const seenGoal = new Set();
@@ -298,6 +392,7 @@ export function routeByRules(text, now = new Date()) {
   }
 
   items.push(...tasks);
+  items.push(...ledger);
 
   if (!items.length) {
     if (hasToday) items.push({ kind: 'goal', text: clipTask(t), due: findDue(t, now) });
@@ -307,7 +402,7 @@ export function routeByRules(text, now = new Date()) {
 
   return {
     items: items.slice(0, 10),
-    matched: items.filter((i) => i.kind !== 'annual' && i.kind !== 'goal').map((i) => i.dept),
+    matched: items.filter((i) => i.kind === 'task').map((i) => i.dept),
   };
 }
 
@@ -317,10 +412,26 @@ export function sanitizeDispatchItems(raw, { fallbackText = '', now = new Date()
   const out = [];
   const seenTaskDept = new Set();
   const seenGoal = new Set();
+  const seenLedger = new Set();
   let annualCount = 0;
+  let ledgerCount = 0;
 
   for (const item of list) {
     const kind = String(item?.kind ?? '').trim() || (item?.dept ? 'task' : 'goal');
+    if (kind === 'ledger') {
+      if (ledgerCount >= 8) continue;
+      const amount = Math.round(Number(item?.amount) * 100) / 100;
+      const name = clipTask(item?.item ?? item?.text ?? item?.task ?? '', 60);
+      if (!name || !Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) continue;
+      let date = normalizeLedgerDate(item?.date, now);
+      if (!date && /^\d{4}-\d{2}-\d{2}/.test(String(item?.at ?? ''))) date = String(item.at).slice(0, 10);
+      const key = `${name}|${amount}|${date ?? ''}`;
+      if (seenLedger.has(key)) continue;
+      seenLedger.add(key);
+      out.push({ kind: 'ledger', item: name, amount, date });
+      ledgerCount += 1;
+      continue;
+    }
     let text = clipTask(item?.text ?? item?.task ?? '');
     if (!text) continue;
     if (kind === 'goal') text = clipTask(text.replace(/^(今天|今日|今晚|明早|明天|每天|每日)[，,、]?\s*/, ''));

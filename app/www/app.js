@@ -26,7 +26,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const state = {
   identity: null,
   hub: { url: '', token: '', lastSyncAt: null, lastError: null, hubTime: null },
-  ui: { showAll: {} },
+  ui: { showAll: {}, ledgerRange: '7' },
   ai: { available: null, model: null, days: [7, 14, 30, 90], lastDays: 30, reason: null, history: [], loadingHistory: false },
   court: {
     config: null,
@@ -87,21 +87,6 @@ function dueLabel(due) {
   if (p.date === core.bjToday()) return `⏰ 今天 ${time}`;
   if (p.date === core.addDays(core.bjToday(), 1)) return `⏰ 明天 ${time}`;
   return `⏰ ${p.date.slice(5).replace('-', '/')} ${time}`;
-}
-
-/** datetime-local 的值按北京时间转成带 +08:00 的 ISO */
-function dueFromInput(value) {
-  const v = String(value ?? '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) return null;
-  return `${v}:00+08:00`;
-}
-
-/** 把 ISO 的到点时刻填回 datetime-local */
-function dueToInput(due) {
-  const ms = Date.parse(String(due ?? ''));
-  if (!Number.isFinite(ms)) return '';
-  const p = core.bjParts(new Date(ms));
-  return `${p.date}T${p.time.slice(0, 5)}`;
 }
 
 /** 小额也留 4 位：调一次模型常常只花几厘钱 */
@@ -1106,7 +1091,7 @@ function renderDispatchCard() {
       <span>🖋️ 司礼监 · 传旨</span>
       <span class="ai-tag ${canEdit ? 'on' : ''}">${esc(state.court.roleLabel)}可传旨</span>
     </div>
-    <div class="ai-note">管传旨分派：把话原样说来，司礼监拆成内阁大事（带预算）、今日差事与六部差事；拟好先给你过目，点头才下旨。</div>
+    <div class="ai-note">管传旨分派：把话原样说来，司礼监先纠错、听懂，再拆成内阁大事（带预算）、今日差事、六部差事与户部账目；拟好先给你过目，点头才下旨。</div>
     <button type="button" class="btn block dispatch-open-btn" data-open-dispatch ${canEdit ? '' : 'disabled'}>拟旨分发</button>
   `;
 }
@@ -1124,7 +1109,7 @@ function renderCourt() {
       <span>🏛 御书房</span>
       <span class="ai-tag ${canEdit ? 'on' : ''}">我的身份：${esc(state.court.roleLabel)}</span>
     </div>
-    <div class="ai-note">六部各管一摊，点进去可下旨、记进度、催上奏。${
+    <div class="ai-note">六部各管一摊，点进去可看进度、催上奏、撤旨。${
       hubOk ? '' : '驿路未通，差事与账先记本机，连上中枢自会传。'
     }</div>
     <div class="dept-list">${depts.map(deptRow).join('')}</div>
@@ -1153,23 +1138,80 @@ function renderCourt() {
 }
 
 function ledgerSectionHtml() {
-  const sum = court.summarizeLedgerLocal(state.court.state, { days: 30 });
-  const top = (sum.byCategory ?? []).slice(0, 4)
-    .map((c) => `<span class="ledger-cat"><b>${esc(c.label)}</b> ¥${c.amount}</span>`)
-    .join('');
-  const recent = (sum.entries ?? []).slice(-5).reverse()
-    .map((e) => `<div class="ledger-row"><span>${esc(e.item)}</span><span class="ledger-tag">${esc(e.categoryLabel)}</span><span>¥${e.amount}</span></div>`)
-    .join('');
+  const range = state.ui.ledgerRange || '7';
+  const g = court.groupLedger(state.court.state, { range });
+  const ranges = [
+    ['today', '今日'], ['7', '近七日'], ['month', '本月'], ['all', '全部'],
+  ].map(([key, label]) => `<button type="button" class="ledger-range-btn ${range === key ? 'on' : ''}" data-ledger-range="${key}">${label}</button>`).join('');
+  const days = g.days.map((day) => `
+    <div class="ledger-day">
+      <div class="ledger-day-head">
+        <span>${day.date.slice(5).replace('-', '/')} ${dayOfWeek(day.date)}</span>
+        <span>${day.count} 笔 · ¥${day.total}</span>
+      </div>
+      ${day.entries.map((e) => `
+        <div class="ledger-row">
+          <span class="ledger-item">${esc(e.item)}</span>
+          <span class="ledger-tag">${esc(e.categoryLabel)}</span>
+          <span class="ledger-amt">¥${e.amount}</span>
+          <button type="button" class="ledger-edit" data-ledger-edit="${esc(e.id)}" aria-label="改这笔账">✎</button>
+        </div>`).join('')}
+    </div>`).join('');
   return `<div class="dept-ledger">
-    <div class="dept-ledger-head"><span>💰 账房</span><span>近卅日 ${sum.count} 笔 · 合计 ¥${sum.total}</span></div>
-    <div class="ledger-cats">${top || '<span class="ai-note">近卅日还没有账，记一笔试试。</span>'}</div>
-    <div class="addbar" style="margin-top:8px">
-      <input id="courtLedger" type="text" maxlength="80" placeholder="记一笔，譬如「包子4 deepseek50 午饭18」" enterkeyhint="done">
-      <button class="btn" id="courtLedgerBtn">记上</button>
-    </div>
-    <div class="ai-note">一句话可记多笔，账房按类归好：包子→吃喝，deepseek→数码订阅。</div>
-    ${recent ? `<div class="ledger-recent">${recent}</div>` : ''}
+    <div class="dept-ledger-head"><span>💰 户部账目</span><span>今日 ${g.todayCount} 笔 ¥${g.todayTotal} · 本月 ¥${g.monthTotal}</span></div>
+    <div class="ledger-range">${ranges}</div>
+    <div class="ledger-range-sum">${g.count} 笔 · 合计 ¥${g.total}</div>
+    ${days || '<div class="ai-note">这几日还没有账。要记新账，去司礼监说一句「记一笔，午饭18」。</div>'}
+    <button type="button" class="btn block" id="ledgerToDispatch" style="margin-top:8px">去司礼监记一笔 / 改错账</button>
+    <div class="ai-note">账目按日排好了；点每笔后面的「✎」可改名目、金额、日期。新账只从司礼监进。</div>
   </div>`;
+}
+
+function openLedgerEditSheet(id) {
+  const entry = (state.court.state.ledger?.entries ?? []).find((e) => e.id === id);
+  if (!entry) {
+    toast('这笔账找不着了');
+    return;
+  }
+  openSheet(`
+    <h3>✎ 改这笔账</h3>
+    <p class="s">名目、金额、日期都能改；归类随名目自动重算。</p>
+    <div class="field"><label>名目</label><input id="ledgerItem" type="text" maxlength="40" value="${esc(entry.item)}"></div>
+    <div class="field"><label>金额（元）</label><input id="ledgerAmount" type="number" min="0.01" step="0.01" value="${esc(entry.amount)}"></div>
+    <div class="field"><label>日期</label><input id="ledgerDate" type="date" max="${core.bjToday()}" value="${esc(entry.date)}"></div>
+    <div class="ai-note">眼下归在「${esc(entry.categoryLabel)}」；改完名目会重新归类。</div>
+    <div class="sheet-actions">
+      <button class="btn" id="ledgerSave">存上</button>
+      <button class="btn ghost" id="ledgerDelete">删掉这笔</button>
+      <button class="btn ghost" id="ledgerCancel">罢了</button>
+    </div>
+  `, (root) => {
+    root.querySelector('#ledgerCancel').addEventListener('click', closeSheet);
+    root.querySelector('#ledgerSave').addEventListener('click', async () => {
+      const item = root.querySelector('#ledgerItem').value.trim();
+      const amount = Number(root.querySelector('#ledgerAmount').value);
+      const date = root.querySelector('#ledgerDate').value;
+      try {
+        await applyCourt((s) => court.updateLedgerLocal(s, id, { item, amount, date }));
+        closeSheet();
+        toast('账目已改');
+        if (state.court.currentDept === 'hubu') void openDeptSheet('hubu');
+      } catch (err) {
+        toast(`改不成：${String(err?.message ?? err)}`, 4200);
+      }
+    });
+    root.querySelector('#ledgerDelete').addEventListener('click', async () => {
+      if (!confirm('真要把这笔账删掉？')) return;
+      try {
+        await applyCourt((s) => court.removeLedgerLocal(s, id));
+        closeSheet();
+        toast('这笔账已删');
+        if (state.court.currentDept === 'hubu') void openDeptSheet('hubu');
+      } catch (err) {
+        toast(`删不掉：${String(err?.message ?? err)}`, 4200);
+      }
+    });
+  });
 }
 
 async function openDeptSheet(deptId) {
@@ -1196,11 +1238,8 @@ async function openDeptSheet(deptId) {
     <div class="dept-tasks">${rows}</div>
     ${deptId === 'hubu' ? ledgerSectionHtml() : ''}
     ${canEdit ? `
-      <div class="addbar" style="margin-top:12px">
-        <input id="deptTaskInput" type="text" maxlength="80" placeholder="给${esc(dept.name)}下旨…" enterkeyhint="done">
-        <button class="btn" id="deptTaskAdd" data-dept="${deptId}">下旨</button>
-      </div>
-      <label class="due-line">到点提醒（可不填）<input id="deptTaskDue" type="datetime-local"></label>` : '<div class="ai-note">下旨的事由陛下与皇后定夺；家人可以先看着。</div>'}
+      <button type="button" class="btn block" id="deptToDispatch" data-dept="${deptId}" style="margin-top:12px">去司礼监下旨</button>
+      <div class="ai-note">所有新建差事都从司礼监进；这里只查看进度、撤旨与上奏。</div>` : '<div class="ai-note">下旨的事由陛下与皇后定夺；家人可以先看着。</div>'}
     <div class="sheet-actions">
       <button class="btn" id="deptSummon" data-dept="${deptId}" ${state.hub.url ? '' : 'disabled'}>让该部上奏</button>
       <button class="btn ghost" id="deptClose">退下</button>
@@ -1209,23 +1248,6 @@ async function openDeptSheet(deptId) {
   `, (root) => {
     root.querySelector('#deptClose').addEventListener('click', closeSheet);
   });
-}
-
-async function createDeptTask(deptId) {
-  const input = $('#deptTaskInput');
-  const text = input?.value?.trim();
-  if (!text) return;
-  try {
-    await applyCourt((s) => court.addTaskLocal(s, deptId, {
-      text,
-      by: state.identity.memberId,
-      due: dueFromInput($('#deptTaskDue')?.value),
-    }));
-    await openDeptSheet(deptId);
-    toast('已给该部下旨（先记本机，稍后传中枢）', 2800);
-  } catch (err) {
-    toast(`下旨不成：${String(err?.message ?? err)}`, 4200);
-  }
 }
 
 async function removeDeptTask(deptId, id) {
@@ -1247,8 +1269,9 @@ function openDispatchSheet() {
   }
   openSheet(`
     <h3>🖋️ 司礼监 · 传旨</h3>
-    <p class="s">把您的话原样说来，司礼监拆成三堆：内阁大事（带预算）、今日差事、六部差事。拆完先给您过目，点头才下旨。</p>
-    <textarea id="dispatchText" rows="5" maxlength="300" placeholder="例：今年攒两万去海边旅游；今天背三十个单词、跑步半小时；周六去公园玩，中午吃火锅，谁去谁留定一下"></textarea>
+    <p class="s">把您的话原样说来。司礼监先改正语音错字、听懂整段话，再拆成四堆：内阁大事、今日差事、六部差事、户部账目。拆完先给您过目，点头才落库。</p>
+    <textarea id="dispatchText" rows="5" maxlength="300" placeholder="例：包子 白蛋 糯玉米9元 午饭冒菜18元；今天下午三点去接孩子；今年攒两万去海边旅游"></textarea>
+    <div class="ai-note">辨词：「记一笔 / 花了 / 买了」进户部账目，「今天要 / 提醒我」进今日差事，「今年 / 年度」进内阁，其余按六部职掌分。</div>
     <div class="sheet-actions">
       <button class="btn ghost" id="dispatchClose">罢了</button>
       <button class="btn" id="dispatchGo">让司礼监拟旨</button>
@@ -1272,6 +1295,7 @@ async function runDispatch(root) {
   let items = [];
   let source = 'rules';
   let warning = null;
+  let note = '';
 
   if (state.hub.url) {
     try {
@@ -1284,6 +1308,7 @@ async function runDispatch(root) {
       items = res.items ?? [];
       source = res.source ?? 'rules';
       warning = res.warning ?? null;
+      note = res.note ?? '';
       if (res.quota) applyQuota(res.quota, res.cached ? '旧旨（未耗分文）' : '司礼监拟旨完毕');
     } catch (err) {
       const msg = String(err?.message ?? err);
@@ -1302,13 +1327,14 @@ async function runDispatch(root) {
   if (!items.length) {
     items = routeByRules(text).items;
   }
-  renderDispatchResult(root, items, { source, warning });
+  renderDispatchResult(root, items, { source, warning, note });
 }
 
 const DISPATCH_GROUPS = [
   { kind: 'annual', title: '🏯 内阁大事', hint: '计入本年计划，预算可改' },
   { kind: 'goal', title: '📜 今日差事', hint: '记进今天' },
   { kind: 'task', title: '🏛 六部差事', hint: '落到各部名下' },
+  { kind: 'ledger', title: '💰 户部账目', hint: '已花掉的钱，按笔记' },
 ];
 
 function dispatchAnnualRow(item, i) {
@@ -1336,9 +1362,24 @@ function dispatchSimpleRow(item, i) {
       <b>${esc(label)}</b>
     </label>
     <input type="text" maxlength="80" value="${esc(item.text)}" data-dispatch-task="${i}" aria-label="${esc(label)}的差事">
-    <label class="dispatch-due">⏰ 到点
-      <input type="datetime-local" value="${esc(dueToInput(item.due))}" data-dispatch-due="${i}" aria-label="${esc(label)}的到点提醒">
+    ${item.due ? `<span class="dispatch-due-note">⏰ ${esc(dueLabel(item.due))}（司礼监判的）</span>` : ''}
+  </div>`;
+}
+
+function dispatchLedgerRow(item, i) {
+  const date = item.date || core.bjToday();
+  return `<div class="dispatch-item dispatch-ledger">
+    <label class="dispatch-pick">
+      <input type="checkbox" checked data-dispatch-pick="${i}">
+      <b>户部</b>
     </label>
+    <div class="dispatch-ledger-fields">
+      <input type="text" maxlength="40" value="${esc(item.item)}" data-dispatch-item="${i}" aria-label="账目名目">
+      <label class="dispatch-money">¥
+        <input type="number" min="0.01" step="0.01" value="${esc(item.amount)}" data-dispatch-amount="${i}" aria-label="账目金额">
+      </label>
+      <input type="date" value="${esc(date)}" max="${core.bjToday()}" data-dispatch-date="${i}" aria-label="账目日期">
+    </div>
   </div>`;
 }
 
@@ -1352,14 +1393,22 @@ function renderDispatchResult(root, items, meta) {
     const rows = items
       .map((it, i) => ({ it, i }))
       .filter(({ it }) => (it.kind ?? 'task') === g.kind)
-      .map(({ it, i }) => (g.kind === 'annual' ? dispatchAnnualRow(it, i) : dispatchSimpleRow(it, i)))
+      .map(({ it, i }) => {
+        if (g.kind === 'annual') return dispatchAnnualRow(it, i);
+        if (g.kind === 'ledger') return dispatchLedgerRow(it, i);
+        return dispatchSimpleRow(it, i);
+      })
       .join('');
     return rows ? `<div class="dispatch-group"><div class="dispatch-group-head"><b>${g.title}</b><span>${g.hint}</span></div>${rows}</div>` : '';
   }).join('');
   const from = meta.source === 'model' ? '司礼监拟的' : '按老规矩拆的';
+  const ledgerTotal = Math.round(items
+    .filter((it) => it.kind === 'ledger')
+    .reduce((a, it) => a + (Number(it.amount) || 0), 0) * 100) / 100;
   el.innerHTML = `
     <div class="dispatch-list">${groups}</div>
-    <div class="ai-note">${meta.warning ? esc(meta.warning) : `${from}，共 ${items.length} 件；改字、勾选都行，点头才下旨。`}带钟点的到点会响铃。</div>
+    ${meta.note ? `<div class="dispatch-note">🗣️ 司礼监回话：${esc(meta.note)}</div>` : ''}
+    <div class="ai-note">${meta.warning ? esc(meta.warning) : `${from}，共 ${items.length} 件${ledgerTotal ? `（账目合计 ¥${ledgerTotal}）` : ''}；改字、勾选都行，点头才下旨。`}到点时刻由司礼监判断，确认后按点响铃。</div>
     <button class="btn block" id="dispatchConfirm">按此下发（${items.length} 件）</button>
     <button class="btn ghost block" id="dispatchRetry" style="margin-top:6px">让司礼监重拟</button>
   `;
@@ -1371,18 +1420,26 @@ async function confirmDispatch(root, items) {
   const annual = [];
   const goals = [];
   const tasks = [];
+  const ledger = [];
   const picks = [...root.querySelectorAll('[data-dispatch-pick]')].filter((cb) => cb.checked);
   for (const cb of picks) {
     const i = Number(cb.dataset.dispatchPick);
     const it = items[i];
     if (!it) continue;
-    const text = root.querySelector(`[data-dispatch-task="${i}"]`)?.value?.trim() ?? '';
-    const due = dueFromInput(root.querySelector(`[data-dispatch-due="${i}"]`)?.value);
-    if (due && Date.parse(due) <= Date.now()) {
-      toast('有一件的到点时刻已经过了，改一下再下发');
-      return;
+    if (it.kind === 'ledger') {
+      const name = root.querySelector(`[data-dispatch-item="${i}"]`)?.value?.trim() ?? '';
+      const amount = Number(root.querySelector(`[data-dispatch-amount="${i}"]`)?.value);
+      const date = root.querySelector(`[data-dispatch-date="${i}"]`)?.value || core.bjToday();
+      if (!name || !Number.isFinite(amount) || amount <= 0) {
+        toast('有一笔账的名目或金额不对，改一下再下发');
+        return;
+      }
+      ledger.push({ item: name, amount, date });
+      continue;
     }
+    const text = root.querySelector(`[data-dispatch-task="${i}"]`)?.value?.trim() ?? '';
     if (!text) continue;
+    const due = it.due && Date.parse(it.due) > Date.now() ? it.due : null;
     if (it.kind === 'annual') {
       const raw = root.querySelector(`[data-dispatch-budget="${i}"]`)?.value?.trim() ?? '';
       annual.push({ text, period: it.period ?? 'year', budget: raw === '' ? null : Number(raw) });
@@ -1392,7 +1449,7 @@ async function confirmDispatch(root, items) {
       tasks.push({ dept: it.dept, text, due });
     }
   }
-  if (!annual.length && !goals.length && !tasks.length) {
+  if (!annual.length && !goals.length && !tasks.length && !ledger.length) {
     toast('一件都没勾');
     return;
   }
@@ -1400,11 +1457,16 @@ async function confirmDispatch(root, items) {
     if (goals.length) {
       await updateToday((r) => goals.reduce((acc, g) => core.addGoal(acc, g.text, new Date(), { due: g.due }), r));
     }
-    if (annual.length || tasks.length) {
+    if (annual.length || tasks.length || ledger.length) {
       await applyCourt((s) => {
         let next = s;
         for (const a of annual) next = court.addAnnualLocal(next, { ...a, by: state.identity.memberId });
         for (const t of tasks) next = court.addTaskLocal(next, t.dept, { text: t.text, due: t.due, by: state.identity.memberId });
+        for (const l of ledger) {
+          const r = court.addLedgerEntryLocal(next, l, { by: state.identity.memberId });
+          if (!r.ok) throw new Error(r.error);
+          next = r.state;
+        }
         return next;
       });
     }
@@ -1416,9 +1478,14 @@ async function confirmDispatch(root, items) {
       const names = [...new Set(tasks.map((t) => DEPT_NAMES[t.dept] ?? t.dept))].join('、');
       parts.push(`六部 ${tasks.length} 道（${names}）`);
     }
+    if (ledger.length) {
+      const total = Math.round(ledger.reduce((a, l) => a + l.amount, 0) * 100) / 100;
+      parts.push(`户部账目 ${ledger.length} 笔 ¥${total}`);
+    }
     // 让刚接到旨的部在御书房里闪一下，主上能看见落到哪儿了
-    if (tasks.length && state.page === 'court') {
-      state.ui.flashDepts = tasks.map((t) => t.dept);
+    const flashed = [...new Set([...tasks.map((t) => t.dept), ...(ledger.length ? ['hubu'] : [])])];
+    if (flashed.length && state.page === 'court') {
+      state.ui.flashDepts = flashed;
       renderCourt();
       setTimeout(() => {
         state.ui.flashDepts = [];
@@ -1560,26 +1627,6 @@ async function openMeeting() {
   }
 }
 
-async function submitLedger() {
-  const input = $('#courtLedger');
-  const text = input?.value?.trim() ?? '';
-  if (!text) return;
-  try {
-    const res = court.addLedgerLocal(state.court.state, text, { by: state.identity.memberId });
-    if (!res.ok) {
-      toast(`没认出金额：${res.error}`, 4200);
-      return;
-    }
-    await applyCourt(() => res.state);
-    const desc = res.entries.map((x) => `${x.item} ¥${x.amount}（${x.categoryLabel}）`).join('、');
-    toast(`记上了 ${res.entries.length} 笔：${desc}`, 4200);
-    if (res.unparsed?.length) toast(`有 ${res.unparsed.length} 段没认出金额：${res.unparsed.join('、')}`, 4200);
-    if (state.court.currentDept === 'hubu') await openDeptSheet('hubu');
-  } catch (err) {
-    toast(`记账失败：${String(err?.message ?? err)}`, 4200);
-  }
-}
-
 async function setMyCourtRole(role) {
   if (!['emperor', 'empress', 'member'].includes(role)) return;
   state.court.roles = { ...state.court.roles, [state.identity.memberId]: role };
@@ -1669,7 +1716,7 @@ function settingsHtml() {
       <div class="row">
         <button class="btn ghost" id="copyData">复制全部数据</button>
       </div>
-      <div class="hint">数据只在这台手机与家中电脑，不劳云端。复制出来是「2026年11月18日：事项一；事项二。」一天一行。 · 大内家事 v1.1</div>
+      <div class="hint">数据只在这台手机与家中电脑，不劳云端。复制出来是「2026年11月18日：事项一；事项二。」一天一行。 · 大内家事 v1.2</div>
     </div>
   `;
 }
@@ -1993,16 +2040,32 @@ function bindEvents() {
       void removeAnnualGoal(annualDel.dataset.annualDel);
       return;
     }
+    const ledgerEdit = e.target.closest('[data-ledger-edit]');
+    if (ledgerEdit) {
+      openLedgerEditSheet(ledgerEdit.dataset.ledgerEdit);
+      return;
+    }
+    const ledgerRange = e.target.closest('[data-ledger-range]');
+    if (ledgerRange) {
+      state.ui.ledgerRange = ledgerRange.dataset.ledgerRange;
+      if (state.court.currentDept === 'hubu') void openDeptSheet('hubu');
+      return;
+    }
 
-    // 司礼监传旨：内阁、今日差事、御书房与底栏各有一个入口
+    // 司礼监传旨：所有新建差事/账目的唯一入口
     if (e.target.closest('[data-open-dispatch]')) {
       openDispatchSheet();
       return;
     }
 
     switch (e.target.id) {
-      case 'deptTaskAdd':
-        void createDeptTask(e.target.dataset.dept || e.target.closest('[data-dept]')?.dataset.dept);
+      case 'deptToDispatch':
+        closeSheet();
+        openDispatchSheet();
+        return;
+      case 'ledgerToDispatch':
+        closeSheet();
+        openDispatchSheet();
         return;
       case 'deptSummon':
         void summonOne(e.target.dataset.dept || e.target.closest('[data-dept]')?.dataset.dept);
@@ -2022,9 +2085,6 @@ function bindEvents() {
         return;
       case 'courtMeeting':
         void openMeeting();
-        return;
-      case 'courtLedgerBtn':
-        void submitLedger();
         return;
       case 'saveName': {
         const name = $('#nameInput').value.trim();
@@ -2145,9 +2205,9 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.id === 'courtLedger') {
+    if (e.key === 'Enter' && e.target.id === 'ledgerItem') {
       e.preventDefault();
-      void submitLedger();
+      document.querySelector('#ledgerSave')?.click();
     }
   });
 
